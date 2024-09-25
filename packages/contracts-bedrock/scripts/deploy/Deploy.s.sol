@@ -437,13 +437,14 @@ contract Deploy is Deployer {
         ProxyAdmin admin = new ProxyAdmin{ salt: _implSalt() }({ _owner: msg.sender });
         require(admin.owner() == msg.sender);
 
-        AddressManager addressManager = AddressManager(mustGetAddress("AddressManager"));
-        if (admin.addressManager() != addressManager) {
-            admin.setAddressManager(addressManager);
+        // The AddressManager is only required for OP Chains
+        if (!_isSuperchain) {
+            AddressManager addressManager = AddressManager(mustGetAddress("AddressManager"));
+            if (admin.addressManager() != addressManager) {
+                admin.setAddressManager(addressManager);
+            }
+            require(admin.addressManager() == addressManager);
         }
-
-        require(admin.addressManager() == addressManager);
-
         save(proxyAdminName, address(admin));
         console.log("%s deployed at %s", proxyAdminName, address(admin));
         addr_ = address(admin);

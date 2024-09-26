@@ -436,7 +436,8 @@ contract Deploy is Deployer {
         console.log("Deploying %s", proxyAdminName);
 
         // Include the proxyAdminName in the salt to prevent a create2 collision
-        ProxyAdmin admin = new ProxyAdmin{ salt: keccak256(abi.encode(_implSalt(), proxyAdminName)) }({ _owner: msg.sender });
+        ProxyAdmin admin =
+            new ProxyAdmin{ salt: keccak256(abi.encode(_implSalt(), proxyAdminName)) }({ _owner: msg.sender });
         require(admin.owner() == msg.sender);
 
         // The AddressManager is only required for OP Chains

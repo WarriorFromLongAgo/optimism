@@ -434,7 +434,9 @@ contract Deploy is Deployer {
         string memory proxyAdminName = _isSuperchain ? "SuperchainProxyAdmin" : "ProxyAdmin";
 
         console.log("Deploying %s", proxyAdminName);
-        ProxyAdmin admin = new ProxyAdmin{ salt: _implSalt() }({ _owner: msg.sender });
+
+        // Include the proxyAdminName in the salt to prevent a create2 collision
+        ProxyAdmin admin = new ProxyAdmin{ salt: keccak256(abi.encode(_implSalt(), proxyAdminName)) }({ _owner: msg.sender });
         require(admin.owner() == msg.sender);
 
         // The AddressManager is only required for OP Chains

@@ -18,39 +18,58 @@ import (
 var ErrReorg = errors.New("block does not extend existing chain")
 
 // channelManager stores a contiguous set of blocks & turns them into channels.
+// 存储一组连续的块并将它们转换为通道。
 // Upon receiving tx confirmation (or a tx failure), it does channel error handling.
+// 收到 tx 确认（或 tx 失败）后，它会进行通道错误处理。
 //
 // For simplicity, it only creates a single pending channel at a time & waits for
+// 为简单起见，它一次只创建一个待处理的通道，并等待
 // the channel to either successfully be submitted or timeout before creating a new
 // channel.
+// 通道成功提交或超时后再创建新的通道。
 // Public functions on channelManager are safe for concurrent access.
+// channelManager 上的公共函数对于并发访问是安全的。
 type channelManager struct {
-	mu          sync.Mutex
-	log         log.Logger
-	metr        metrics.Metricer
+	// 互斥锁，用于保护并发访问。
+	mu sync.Mutex
+	// 日志记录器。
+	log log.Logger
+	// Metricer 指标记录器。
+	metr metrics.Metricer
+	// 通道配置提供者。
 	cfgProvider ChannelConfigProvider
-	rollupCfg   *rollup.Config
+	// Rollup 配置。
+	rollupCfg *rollup.Config
 
 	// All blocks since the last request for new tx data.
+	// 存储自上次请求以来的所有区块。
 	blocks []*types.Block
 	// The latest L1 block from all the L2 blocks in the most recently closed channel
+	// 最近关闭的通道中的最新 L1 区块。
 	l1OriginLastClosedChannel eth.BlockID
 	// The default ChannelConfig to use for the next channel
+	// 默认的通道配置。
 	defaultCfg ChannelConfig
 	// last block hash - for reorg detection
+	// 最后一个区块的哈希，用于检测重组。
 	tip common.Hash
 
 	// channel to write new block data to
+	// 当前正在写入新区块数据的通道。
 	currentChannel *channel
 	// channels to read frame data from, for writing batches onchain
+	// 通道队列，用于从中读取帧数据并写入链上。
 	channelQueue []*channel
 	// used to lookup channels by tx ID upon tx success / failure
+	// 用于根据交易 ID 查找通道。
 	txChannels map[string]*channel
 
 	// if set to true, prevents production of any new channel frames
+	// 标志是否已关闭，防止生成新的通道帧。
 	closed bool
 }
 
+// NewChannelManager 创建并返回一个新的 channelManager 实例。
 func NewChannelManager(log log.Logger, metr metrics.Metricer, cfgProvider ChannelConfigProvider, rollupCfg *rollup.Config) *channelManager {
 	return &channelManager{
 		log:         log,
@@ -64,6 +83,7 @@ func NewChannelManager(log log.Logger, metr metrics.Metricer, cfgProvider Channe
 
 // Clear clears the entire state of the channel manager.
 // It is intended to be used before launching op-batcher and after an L2 reorg.
+// 清除通道管理器的整个状态，通常在启动 op-batcher 和 L2 重组后使用。
 func (s *channelManager) Clear(l1OriginLastClosedChannel eth.BlockID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,6 +99,7 @@ func (s *channelManager) Clear(l1OriginLastClosedChannel eth.BlockID) {
 
 // TxFailed records a transaction as failed. It will attempt to resubmit the data
 // in the failed transaction.
+// TxFailed 将交易记录为失败。它将尝试重新提交失败交易中的数据。
 func (s *channelManager) TxFailed(_id txID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,6 +120,9 @@ func (s *channelManager) TxFailed(_id txID) {
 // a channel have been marked as confirmed on L1 the channel may be invalid & need to be
 // resubmitted.
 // This function may reset the pending channel if the pending channel has timed out.
+// TxConfirmed 将交易标记为在 L1 上已确认。不幸的是，即使通道中的所有帧
+// 都已在 L1 上标记为已确认，该通道也可能无效且需要重新提交。
+// 如果待处理通道已超时，则此功能可能会重置待处理通道。
 func (s *channelManager) TxConfirmed(_id txID, inclusionBlock eth.BlockID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,6 +142,7 @@ func (s *channelManager) TxConfirmed(_id txID, inclusionBlock eth.BlockID) {
 }
 
 // removePendingChannel removes the given completed channel from the manager's state.
+// 从管理器状态中删除给定的完成通道。
 func (s *channelManager) removePendingChannel(channel *channel) {
 	if s.currentChannel == channel {
 		s.currentChannel = nil
@@ -138,6 +163,7 @@ func (s *channelManager) removePendingChannel(channel *channel) {
 
 // nextTxData dequeues frames from the channel and returns them encoded in a transaction.
 // It also updates the internal tx -> channels mapping
+// 从通道中出队帧，并以交易的形式返回它们。它还会更新内部 tx -> 通道映射
 func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 	if channel == nil || !channel.HasTxData() {
 		s.log.Trace("no next tx data")
@@ -149,14 +175,18 @@ func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 }
 
 // TxData returns the next tx data that should be submitted to L1.
+// TxData 返回下一个应提交给 L1 的 tx 数据。
 //
 // If the current channel is
 // full, it only returns the remaining frames of this channel until it got
 // successfully fully sent to L1. It returns io.EOF if there's no pending tx data.
+// 如果当前通道已满，则仅返回此通道的剩余帧，直到成功完全发送到 L1。如果没有待处理的 tx 数据，则返回 io.EOF。
 //
 // It will decide whether to switch DA type automatically.
+// 它将决定是否自动切换 DA 类型。
 // When switching DA type, the channelManager state will be rebuilt
 // with a new ChannelConfig.
+// 切换 DA 类型时，将使用新的 ChannelConfig 重建 channelManager 状态。
 func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -193,11 +223,15 @@ func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 }
 
 // getReadyChannel returns the next channel ready to submit data, or an error.
+// getReadyChannel 返回下一个准备提交数据的通道，或者返回错误。
 // It will create a new channel if necessary.
+// 必要时，它将创建一个新通道。
 // If there is no data ready to send, it adds blocks from the block queue
 // to the current channel and generates frames for it.
+// 如果没有准备发送的数据，它会将块队列中的块添加到当前通道并为其生成帧。
 // Always returns nil and the io.EOF sentinel error when
 // there is no channel with txData
+// 当没有带有 txData 的通道时，始终返回 nil 和 io.EOF 标记错误
 func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
 	var firstWithTxData *channel
 	for _, ch := range s.channelQueue {
@@ -253,6 +287,8 @@ func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
 // ensureChannelWithSpace ensures currentChannel is populated with a channel that has
 // space for more data (i.e. channel.IsFull returns false). If currentChannel is nil
 // or full, a new channel is created.
+// ensureChannelWithSpace 确保 currentChannel 中填充了具有更多数据空间的通道（即 channel.IsFull 返回 false）。
+// 如果 currentChannel 为 nil 或 已满，则会创建一个新通道。
 func (s *channelManager) ensureChannelWithSpace(l1Head eth.BlockID) error {
 	if s.currentChannel != nil && !s.currentChannel.IsFull() {
 		return nil
@@ -287,6 +323,7 @@ func (s *channelManager) ensureChannelWithSpace(l1Head eth.BlockID) error {
 }
 
 // registerL1Block registers the given block at the current channel.
+// registerL1Block 在当前通道注册给定的块。
 func (s *channelManager) registerL1Block(l1Head eth.BlockID) {
 	s.currentChannel.CheckTimeout(l1Head.Number)
 	s.log.Debug("new L1-block registered at channel builder",
@@ -298,6 +335,7 @@ func (s *channelManager) registerL1Block(l1Head eth.BlockID) {
 
 // processBlocks adds blocks from the blocks queue to the current channel until
 // either the queue got exhausted or the channel is full.
+// processBlocks 将块从块队列添加到当前通道，直到 队列耗尽或通道已满
 func (s *channelManager) processBlocks() error {
 	var (
 		blocksAdded int
@@ -347,6 +385,7 @@ func (s *channelManager) processBlocks() error {
 }
 
 // outputFrames generates frames for the current channel, and computes and logs the compression ratio
+// outputFrames 为当前通道生成帧，并计算和记录压缩比
 func (s *channelManager) outputFrames() error {
 	if err := s.currentChannel.OutputFrames(); err != nil {
 		return fmt.Errorf("creating frames with channel builder: %w", err)
@@ -395,6 +434,8 @@ func (s *channelManager) outputFrames() error {
 // AddL2Block adds an L2 block to the internal blocks queue. It returns ErrReorg
 // if the block does not extend the last block loaded into the state. If no
 // blocks were added yet, the parent hash check is skipped.
+// AddL2Block 将 L2 块添加到内部块队列。如果该块未扩展加载到状态中的最后一个块，则返回 ErrReorg
+// 如果尚未添加任何块，则跳过父哈希检查。
 func (s *channelManager) AddL2Block(block *types.Block) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -410,6 +451,10 @@ func (s *channelManager) AddL2Block(block *types.Block) error {
 	return nil
 }
 
+// 是一个辅助函数，用于从 L2 区块和 L1 信息生成一个 eth.L2BlockRef 结构体。
+// 这个结构体包含了 L2 区块的基本信息以及与 L1 相关的引用信息。
+// block *types.Block: L2 区块的指针，包含区块的详细信息。
+// l1info *derive.L1BlockInfo: L1 区块信息的指针，包含与 L1 相关的详细信息。
 func l2BlockRefFromBlockAndL1Info(block *types.Block, l1info *derive.L1BlockInfo) eth.L2BlockRef {
 	return eth.L2BlockRef{
 		Hash:           block.Hash(),
@@ -430,6 +475,13 @@ var ErrPendingAfterClose = errors.New("pending channels remain after closing cha
 // Instead, this is part of the pending-channel submission work: after closing,
 // the caller SHOULD drain pending channels by generating TxData repeatedly until there is none left (io.EOF).
 // A ErrPendingAfterClose error will be returned if there are any remaining pending channels to submit.
+// Close 会清除任何尚未运行的待处理通道，以留下干净的派生状态。
+// Close 然后将剩余的当前打开通道（如果有）标记为“已满”，以便也可以提交。
+// Close 不会立即输出当前剩余通道的帧：
+// 因为这可能会出错，因为单个通道有限制。
+// 相反，这是待处理通道提交工作的一部分：关闭后，
+// 调用者应该通过反复生成 TxData 来耗尽待处理通道，直到没有剩余通道（io.EOF）。
+// 如果有任何剩余的待处理通道要提交，将返回 ErrPendingAfterClose 错误。
 func (s *channelManager) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -477,6 +529,8 @@ func (s *channelManager) Close() error {
 
 // Requeue rebuilds the channel manager state by
 // rewinding blocks back from the channel queue, and setting the defaultCfg.
+// Requeue 通过
+// 从通道队列中倒回块并设置 defaultCfg 来重建通道管理器状态。
 func (s *channelManager) Requeue(newCfg ChannelConfig) {
 	newChannelQueue := []*channel{}
 	blocksToRequeue := []*types.Block{}

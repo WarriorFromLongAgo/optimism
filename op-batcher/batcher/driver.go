@@ -36,6 +36,7 @@ var (
 	}
 )
 
+// 用于引用交易，包含交易 ID、是否取消和是否为 Blob 类型的标志。
 type txRef struct {
 	id       txID
 	isCancel bool
@@ -61,20 +62,24 @@ func (r txRef) string(txIDStringer func(txID) string) string {
 	return txIDStringer(r.id)
 }
 
+// L1Client 定义了与 L1 客户端交互的方法，如获取区块头和账户的 nonce。
 type L1Client interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
 }
 
+// L2Client 定义了与 L2 客户端交互的方法，如根据区块号获取区块。
 type L2Client interface {
 	BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error)
 }
 
+// RollupClient 定义了与 Rollup 客户端交互的方法，如获取同步状态。
 type RollupClient interface {
 	SyncStatus(ctx context.Context) (*eth.SyncStatus, error)
 }
 
 // DriverSetup is the collection of input/output interfaces and configuration that the driver operates on.
+// 包含了 BatchSubmitter 所需的各种配置和客户端实例。
 type DriverSetup struct {
 	Log              log.Logger
 	Metr             metrics.Metricer
@@ -89,6 +94,8 @@ type DriverSetup struct {
 
 // BatchSubmitter encapsulates a service responsible for submitting L2 tx
 // batches to L1 for availability.
+// 核心结构体，负责管理和提交 L2 交易批次到 L1。
+// 包含了各种状态变量、上下文、互斥锁和等待组。
 type BatchSubmitter struct {
 	DriverSetup
 
@@ -114,6 +121,7 @@ type BatchSubmitter struct {
 }
 
 // NewBatchSubmitter initializes the BatchSubmitter driver from a preconfigured DriverSetup
+// NewBatchSubmitter 从预配置的 DriverSetup 初始化 BatchSubmitter 驱动程序
 func NewBatchSubmitter(setup DriverSetup) *BatchSubmitter {
 	return &BatchSubmitter{
 		DriverSetup: setup,
@@ -121,6 +129,9 @@ func NewBatchSubmitter(setup DriverSetup) *BatchSubmitter {
 	}
 }
 
+// StartBatchSubmitting
+// 启动批次提交器，设置运行状态和上下文，并启动主循环。
+// 检查是否已经在运行，初始化上下文，清除状态，并启动主循环。
 func (l *BatchSubmitter) StartBatchSubmitting() error {
 	l.Log.Info("Starting Batch Submitter")
 
@@ -132,12 +143,17 @@ func (l *BatchSubmitter) StartBatchSubmitting() error {
 	}
 	l.running = true
 
+	// 创建两个上下文：shutdownCtx 和 killCtx，并分别设置取消函数。
 	l.shutdownCtx, l.cancelShutdownCtx = context.WithCancel(context.Background())
 	l.killCtx, l.cancelKillCtx = context.WithCancel(context.Background())
+	// 调用 clearState 方法清除批次提交器的状态。
 	l.clearState(l.shutdownCtx)
+	// 重置最后存储的区块:
 	l.lastStoredBlock = eth.BlockID{}
 
+	// 如果配置中设置了 WaitNodeSync，
 	if l.Config.WaitNodeSync {
+		// 则调用 waitNodeSync 方法等待节点同步完成。
 		err := l.waitNodeSync()
 		if err != nil {
 			return fmt.Errorf("error waiting for node sync: %w", err)
@@ -145,12 +161,14 @@ func (l *BatchSubmitter) StartBatchSubmitting() error {
 	}
 
 	l.wg.Add(1)
+	// 启动主循环: 并启动一个新的 goroutine 运行 loop 方法。
 	go l.loop()
 
 	l.Log.Info("Batch Submitter started")
 	return nil
 }
 
+// StopBatchSubmittingIfRunning 停止批次提交器，处理上下文取消和等待组。
 func (l *BatchSubmitter) StopBatchSubmittingIfRunning(ctx context.Context) error {
 	err := l.StopBatchSubmitting(ctx)
 	if errors.Is(err, ErrBatcherNotRunning) {
@@ -160,6 +178,7 @@ func (l *BatchSubmitter) StopBatchSubmittingIfRunning(ctx context.Context) error
 }
 
 // StopBatchSubmitting stops the batch-submitter loop, and force-kills if the provided ctx is done.
+// 检查是否在运行，取消上下文，并等待所有 goroutine 结束。
 func (l *BatchSubmitter) StopBatchSubmitting(ctx context.Context) error {
 	l.Log.Info("Stopping Batch Submitter")
 
@@ -190,13 +209,21 @@ func (l *BatchSubmitter) StopBatchSubmitting(ctx context.Context) error {
 
 // loadBlocksIntoState loads all blocks since the previous stored block
 // It does the following:
-//  1. Fetch the sync status of the sequencer
-//  2. Check if the sync status is valid or if we are all the way up to date
-//  3. Check if it needs to initialize state OR it is lagging (todo: lagging just means race condition?)
-//  4. Load all new blocks into the local state.
+// 1. Fetch the sync status of the sequencer
+// 2. Check if the sync status is valid or if we are all the way up to date
+// 3. Check if it needs to initialize state OR it is lagging (todo: lagging just means race condition?)
+// 4. Load all new blocks into the local state.
 //
 // If there is a reorg, it will reset the last stored block but not clear the internal state so
 // the state can be flushed to L1.
+
+// loadBlocksIntoState 加载自上一个存储块以来的所有块
+// 它执行以下操作：
+// 1. 获取序列器的同步状态
+// 2. 检查同步状态是否有效或我们是否一直保持最新状态
+// 3. 检查是否需要初始化状态或是否滞后（todo：滞后只是意味着竞争条件？）
+// 4. 将所有新块加载到本地状态。
+// 如果有重组，它将重置最后存储的块但不清除内部状态，以便状态可以刷新到 L1。
 func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context) error {
 	start, end, err := l.calculateL2BlockRangeToStore(ctx)
 	if err != nil {
@@ -233,6 +260,7 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context) error {
 }
 
 // loadBlockIntoState fetches & stores a single block into `state`. It returns the block it loaded.
+// 获取单个块并将其存储到“状态”中。它返回其加载的块。
 func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uint64) (*types.Block, error) {
 	l2Client, err := l.EndpointProvider.EthClient(ctx)
 	if err != nil {
@@ -257,6 +285,8 @@ func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uin
 
 // calculateL2BlockRangeToStore determines the range (start,end] that should be loaded into the local state.
 // It also takes care of initializing some local state (i.e. will modify l.lastStoredBlock in certain conditions)
+// calculateL2BlockRangeToStore 确定应加载到本地状态的范围（开始，结束]。
+// 它还负责初始化一些本地状态（即在某些条件下修改 l.lastStoredBlock）
 func (l *BatchSubmitter) calculateL2BlockRangeToStore(ctx context.Context) (eth.BlockID, eth.BlockID, error) {
 	rollupClient, err := l.EndpointProvider.RollupClient(ctx)
 	if err != nil {
@@ -304,8 +334,17 @@ func (l *BatchSubmitter) calculateL2BlockRangeToStore(ctx context.Context) (eth.
 // Submitted batch, but it is not valid
 // Missed L2 block somehow.
 
+// 发生以下情况：
+// 新的 L2 块（重组或不重组）
+// L1 交易已确认
+// 批处理程序执行的操作：
+// 确保已创建通道并将其作为 L2 范围的帧提交
+// 错误条件：
+// 已提交批处理，但无效
+// 不知何故错过了 L2 块。
+
 const (
-	// Txpool states.  Possible state transitions:
+	// TxpoolGood Txpool states.  Possible state transitions:
 	//   TxpoolGood -> TxpoolBlocked:
 	//     happens when ErrAlreadyReserved is ever returned by the TxMgr.
 	//   TxpoolBlocked -> TxpoolCancelPending:
@@ -313,19 +352,36 @@ const (
 	//     send a cancellation transaction.
 	//   TxpoolCancelPending -> TxpoolGood:
 	//     happens once the cancel transaction completes, whether successfully or in error.
+
+	// TxpoolGood Txpool 状态。可能的状态转换：
+	// TxpoolGood -> TxpoolBlocked：
+	// 当 TxMgr 返回 ErrAlreadyReserved 时发生。
+	// TxpoolBlocked -> TxpoolCancelPending：
+	// 一旦发送循环检测到 txpool 被阻止，并导致尝试
+	// 发送取消交易，就会发生。
+	// TxpoolCancelPending -> TxpoolGood：
+	// 一旦取消交易完成，无论成功还是错误，都会发生。
 	TxpoolGood int = iota
 	TxpoolBlocked
 	TxpoolCancelPending
 )
 
+// 主循环，定期检查和处理交易池状态，加载区块并发布状态到 L1。
+// 启动接收处理循环，定期检查交易池状态，加载区块并发布状态。
 func (l *BatchSubmitter) loop() {
+	// 负责定期检查和处理交易池状态，加载区块并发布状态到 L1。
 	defer l.wg.Done()
 
+	// 创建接收通道 receiptsCh
 	receiptsCh := make(chan txmgr.TxReceipt[txRef])
+	// 交易队列 queue。
 	queue := txmgr.NewQueue[txRef](l.killCtx, l.Txmgr, l.Config.MaxPendingTransactions)
+	// 创建错误组 daGroup，并根据配置设置并发限制。
 	daGroup := &errgroup.Group{}
 	// errgroup with limit of 0 means no goroutine is able to run concurrently,
 	// so we only set the limit if it is greater than 0.
+	// errgroup 的限制为 0 意味着没有 goroutine 能够并发运行，
+	// 因此我们仅当限制大于 0 时才设置限制。
 	if l.Config.MaxConcurrentDARequests > 0 {
 		daGroup.SetLimit(int(l.Config.MaxConcurrentDARequests))
 	}
@@ -431,22 +487,29 @@ func (l *BatchSubmitter) loop() {
 
 // waitNodeSync Check to see if there was a batcher tx sent recently that
 // still needs more block confirmations before being considered finalized
+// waitNodeSync 检查最近是否发送了批处理 tx，在被视为最终确定之前仍需要更多块确认
+// waitNodeSync 方法的主要功能是检查最近是否发送了批处理交易，并等待节点同步到最新的 L1 区块，以确保交易被视为最终确定。
 func (l *BatchSubmitter) waitNodeSync() error {
 	ctx := l.shutdownCtx
+	// 使用 EndpointProvider 获取 Rollup 客户端。
 	rollupClient, err := l.EndpointProvider.RollupClient(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get rollup client: %w", err)
 	}
 
+	// 创建一个带有超时的上下文 cCtx，超时时间为 NetworkTimeout。
 	cCtx, cancel := context.WithTimeout(ctx, l.Config.NetworkTimeout)
 	defer cancel()
 
+	// 调用 l1Tip 方法获取当前的 L1 最新区块。
 	l1Tip, err := l.l1Tip(cCtx)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve l1 tip: %w", err)
 	}
 
+	// 将 l1Tip.Number 设为目标区块 l1TargetBlock。
 	l1TargetBlock := l1Tip.Number
+	// 如果配置中设置了 CheckRecentTxsDepth，则检查最近的批处理交易。
 	if l.Config.CheckRecentTxsDepth != 0 {
 		l.Log.Info("Checking for recently submitted batcher transactions on L1")
 		recentBlock, found, err := eth.CheckRecentTxs(cCtx, l.L1Client, l.Config.CheckRecentTxsDepth, l.Txmgr.From())
@@ -457,12 +520,13 @@ func (l *BatchSubmitter) waitNodeSync() error {
 			"l1_head", l1Tip, "l1_recent", recentBlock, "found", found)
 		l1TargetBlock = recentBlock
 	}
-
+	// 调用 dial.WaitRollupSync 方法，等待 Rollup 客户端同步到目标区块 l1TargetBlock，确保交易被视为最终确定。
 	return dial.WaitRollupSync(l.shutdownCtx, l.Log, rollupClient, l1TargetBlock, time.Second*12)
 }
 
 // publishStateToL1 queues up all pending TxData to be published to the L1, returning when there is
 // no more data to queue for publishing or if there was an error queing the data.
+// publishStateToL1 将所有待处理的 TxData 排队以发布到 L1，当没有更多数据排队发布或排队数据时出现错误时返回。
 func (l *BatchSubmitter) publishStateToL1(queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) {
 	for {
 		// if the txmgr is closed, we stop the transaction sending
@@ -485,11 +549,13 @@ func (l *BatchSubmitter) publishStateToL1(queue *txmgr.Queue[txRef], receiptsCh 
 }
 
 // clearState clears the state of the channel manager
+// clearState 清除频道管理器的状态
 func (l *BatchSubmitter) clearState(ctx context.Context) {
 	l.Log.Info("Clearing state")
 	defer l.Log.Info("State cleared")
 
 	clearStateWithL1Origin := func() bool {
+		// 该函数尝试获取 L1 安全起源，并使用该起源清除状态。
 		l1SafeOrigin, err := l.safeL1Origin(ctx)
 		if err != nil {
 			l.Log.Warn("Failed to query L1 safe origin, will retry", "err", err)
@@ -506,9 +572,11 @@ func (l *BatchSubmitter) clearState(ctx context.Context) {
 		return
 	}
 
+	// 如果初次尝试失败，设置一个定时器，每 5 秒重试一次。
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
 
+	// 进入一个无限循环，直到成功清除状态或上下文被取消。
 	for {
 		select {
 		case <-tick.C:
@@ -524,6 +592,7 @@ func (l *BatchSubmitter) clearState(ctx context.Context) {
 }
 
 // publishTxToL1 submits a single state tx to the L1
+// publishTxToL1 向 L1 提交单个状态交易
 func (l *BatchSubmitter) publishTxToL1(ctx context.Context, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) error {
 	// send all available transactions
 	l1tip, err := l.l1Tip(ctx)
@@ -578,6 +647,7 @@ func (l *BatchSubmitter) safeL1Origin(ctx context.Context) (eth.BlockID, error) 
 // cancelBlockingTx creates an empty transaction of appropriate type to cancel out the incompatible
 // transaction stuck in the txpool. In the future we might send an actual batch transaction instead
 // of an empty one to avoid wasting the tx fee.
+// cancelBlockingTx 创建适当类型的空交易以取消交易池中卡住的不兼容交易。将来我们可能会发送实际的批量交易而不是空交易，以避免浪费交易费。
 func (l *BatchSubmitter) cancelBlockingTx(queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], isBlockedBlob bool) {
 	var candidate *txmgr.TxCandidate
 	var err error
@@ -591,6 +661,7 @@ func (l *BatchSubmitter) cancelBlockingTx(queue *txmgr.Queue[txRef], receiptsCh 
 }
 
 // publishToAltDAAndL1 posts the txdata to the DA Provider and then sends the commitment to L1.
+// publishToAltDAAndL1 将 txdata 发布到 DA 提供商，然后将承诺发送给 L1。
 func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) {
 	// sanity checks
 	if nf := len(txdata.frames); nf != 1 {
@@ -631,6 +702,9 @@ func (l *BatchSubmitter) publishToAltDAAndL1(txdata txData, queue *txmgr.Queue[t
 // sendTransaction creates & queues for sending a transaction to the batch inbox address with the given `txData`.
 // This call will block if the txmgr queue is at the  max-pending limit.
 // The method will block if the queue's MaxPendingTransactions is exceeded.
+// sendTransaction 创建并排队，用于使用给定的“txData”将交易发送到批处理收件箱地址。
+// 如果 txmgr 队列达到最大待处理限制，则此调用将阻塞。
+// 如果超出队列的 MaxPendingTransactions，则该方法将阻塞。
 func (l *BatchSubmitter) sendTransaction(txdata txData, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef], daGroup *errgroup.Group) error {
 	var err error
 
@@ -664,6 +738,7 @@ func (l *BatchSubmitter) sendTransaction(txdata txData, queue *txmgr.Queue[txRef
 
 // sendTx uses the txmgr queue to send the given transaction candidate after setting its
 // gaslimit. It will block if the txmgr queue has reached its MaxPendingTransactions limit.
+// sendTx 在设置其 gaslimit 后使用 txmgr 队列发送给定的交易候选。如果 txmgr 队列已达到其 MaxPendingTransactions 限制，它将被阻止。
 func (l *BatchSubmitter) sendTx(txdata txData, isCancel bool, candidate *txmgr.TxCandidate, queue *txmgr.Queue[txRef], receiptsCh chan txmgr.TxReceipt[txRef]) {
 	intrinsicGas, err := core.IntrinsicGas(candidate.TxData, nil, false, true, true, false)
 	if err != nil {
@@ -737,7 +812,11 @@ func (l *BatchSubmitter) recordConfirmedTx(id txID, receipt *types.Receipt) {
 
 // l1Tip gets the current L1 tip as a L1BlockRef. The passed context is assumed
 // to be a lifetime context, so it is internally wrapped with a network timeout.
+// l1Tip 将当前 L1 提示作为 L1BlockRef 获取。传递的上下文被假定为
+// 终身上下文，因此它在内部包装了网络超时。
 func (l *BatchSubmitter) l1Tip(ctx context.Context) (eth.L1BlockRef, error) {
+	// 方法用于获取当前 L1 区块链的最新区块（L1 Tip），并将其转换为 eth.L1BlockRef 结构体
+
 	tctx, cancel := context.WithTimeout(ctx, l.Config.NetworkTimeout)
 	defer cancel()
 	head, err := l.L1Client.HeaderByNumber(tctx, nil)

@@ -31,6 +31,11 @@ type Queue[T any] struct {
 //   - ctx: runtime context of the queue. If canceled, all ongoing send processes are canceled.
 //   - txMgr: transaction manager to use for transaction sending
 //   - maxPending: max number of pending txs at once (0 == no limit)
+//
+// NewQueue 创建一个新的事务发送队列，具有以下参数：
+// - ctx：队列的运行时上下文。如果取消，则所有正在进行的发送过程都将被取消。
+// - txMgr：用于事务发送的事务管理器
+// - maxPending：一次待处理事务的最大数量（0 == 无限制）
 func NewQueue[T any](ctx context.Context, txMgr TxManager, maxPending uint64) *Queue[T] {
 	if maxPending > math.MaxInt {
 		// ensure we don't overflow as errgroup only accepts int; in reality this will never be an issue

@@ -33,6 +33,7 @@ var (
 // VersionWithMeta holds the textual version string including the metadata.
 var VersionWithMeta = opservice.FormatVersion(version.Version, GitCommit, GitDate, version.Meta)
 
+// 这是 op-node 的主入口文件,主要功能包括:
 func main() {
 	// Set up logger with a default INFO level in case we fail to parse flags,
 	// otherwise the final critical log won't show what the parsing error was.

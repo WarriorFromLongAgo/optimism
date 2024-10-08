@@ -20,7 +20,9 @@ type NewHeadSource interface {
 // WatchHeadChanges wraps a new-head subscription from NewHeadSource to feed the given Tracker.
 // The ctx is only used to create the subscription, and does not affect the returned subscription.
 func WatchHeadChanges(ctx context.Context, src NewHeadSource, fn HeadSignalFn) (ethereum.Subscription, error) {
+	// 创建一个缓冲通道 headChanges 用于接收新的区块头。
 	headChanges := make(chan *types.Header, 10)
+	// 使用提供的 NewHeadSource 接口订阅新的区块头，将结果发送到 headChanges 通道。
 	sub, err := src.SubscribeNewHead(ctx, headChanges)
 	if err != nil {
 		return nil, err

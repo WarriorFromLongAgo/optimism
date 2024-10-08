@@ -13,6 +13,7 @@ import (
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 )
 
+// Subcommands 这个文件实现了网络相关的子命令,主要功能是: 导出特定网络的 rollup 配置
 var Subcommands = []*cli.Command{
 	{
 		Name:  "dump-rollup-config",

@@ -9,6 +9,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
+// FnTracer 虽然在提供的代码片段中没有直接看到 FnTracer 的定义，但根据命名惯例，它很可能是 Tracer 接口的另一个实现。
+// "Fn" 通常表示 "Function"，这暗示 FnTracer 可能是一个基于函数的追踪器实现。
 type FnTracer struct {
 	OnNewL1HeadFn        func(ctx context.Context, sig eth.L1BlockRef)
 	OnUnsafeL2PayloadFn  func(ctx context.Context, from peer.ID, payload *eth.ExecutionPayloadEnvelope)

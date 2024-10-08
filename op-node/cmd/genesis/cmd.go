@@ -18,6 +18,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
+// 这个文件实现了生成 L1 和 L2 创世块配置的命令,主要功能包括:
+// 生成 L1 开发者创世块配置
+// 生成 L2 创世块配置和 rollup 配置
+// 处理部署配置和 L1 部署信息
 var (
 	l1RPCFlag = &cli.StringFlag{
 		Name:     "l1-rpc",

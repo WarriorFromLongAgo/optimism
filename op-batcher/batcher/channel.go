@@ -71,25 +71,38 @@ func (s *channel) TxFailed(id string) {
 // a channel have been marked as confirmed on L1 the channel may be invalid & need to be
 // resubmitted.
 // This function may reset the pending channel if the pending channel has timed out.
+// TxConfirmed 标记一个交易在 L1 上已确认。
+// 即使通道中的所有帧都在 L1 上被标记为已确认，该通道可能仍然无效并需要重新提交。
+// 如果待处理的通道已超时，此函数可能会重置待处理的通道。
 func (s *channel) TxConfirmed(id string, inclusionBlock eth.BlockID) (bool, []*types.Block) {
 	s.metr.RecordBatchTxSubmitted()
 	s.log.Debug("marked transaction as confirmed", "id", id, "block", inclusionBlock)
+	// 检查交易是否在待处理交易列表中
 	if _, ok := s.pendingTransactions[id]; !ok {
 		s.log.Warn("unknown transaction marked as confirmed", "id", id, "block", inclusionBlock)
 		// TODO: This can occur if we clear the channel while there are still pending transactions
 		// We need to keep track of stale transactions instead
+		// TODO: 这可能发生在我们清除通道时仍有待处理交易的情况下
+		// 我们需要跟踪过期的交易
 		return false, nil
 	}
+	// 从待处理交易列表中删除该交易
 	delete(s.pendingTransactions, id)
+	// 将交易添加到已确认交易列表中
 	s.confirmedTransactions[id] = inclusionBlock
+	// 标记已确认交易列表已更新
 	s.confirmedTxUpdated = true
+	// 通知 channelBuilder 帧已发布
 	s.channelBuilder.FramePublished(inclusionBlock.Number)
 
 	// If this channel timed out, put the pending blocks back into the local saved blocks
 	// and then reset this state so it can try to build a new channel.
+	// 检查通道是否超时
 	if s.isTimedOut() {
+		// 记录通道超时指标
 		s.metr.RecordChannelTimedOut(s.ID())
 		s.log.Warn("Channel timed out", "id", s.ID(), "min_inclusion_block", s.minInclusionBlock, "max_inclusion_block", s.maxInclusionBlock)
+		// 返回 true 和通道中的所有区块，表示需要重新处理
 		return true, s.channelBuilder.Blocks()
 	}
 	// If we are done with this channel, record that.

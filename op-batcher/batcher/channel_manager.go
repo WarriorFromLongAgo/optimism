@@ -100,15 +100,23 @@ func (s *channelManager) Clear(l1OriginLastClosedChannel eth.BlockID) {
 // TxFailed records a transaction as failed. It will attempt to resubmit the data
 // in the failed transaction.
 // TxFailed 将交易记录为失败。它将尝试重新提交失败交易中的数据。
+// TxFailed 记录一个交易失败。它会尝试重新提交失败交易中的数据。
 func (s *channelManager) TxFailed(_id txID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 将 txID 转换为字符串形式
 	id := _id.String()
+	// 检查是否存在与该交易 ID 关联的通道
 	if channel, ok := s.txChannels[id]; ok {
+		// 从 txChannels 映射中删除该交易 ID
 		delete(s.txChannels, id)
+		// 调用通道的 TxFailed 方法,处理失败的交易
 		channel.TxFailed(id)
+		// 如果 channelManager 已关闭且该通道没有已提交的交易
 		if s.closed && channel.NoneSubmitted() {
+			// 记录日志,表示将清除该通道以进行关闭
 			s.log.Info("Channel has no submitted transactions, clearing for shutdown", "chID", channel.ID())
+			// 从待处理通道列表中移除该通道
 			s.removePendingChannel(channel)
 		}
 	} else {
@@ -123,30 +131,46 @@ func (s *channelManager) TxFailed(_id txID) {
 // TxConfirmed 将交易标记为在 L1 上已确认。不幸的是，即使通道中的所有帧
 // 都已在 L1 上标记为已确认，该通道也可能无效且需要重新提交。
 // 如果待处理通道已超时，则此功能可能会重置待处理通道。
+// TxConfirmed 将交易标记为在 L1 上已确认。
+// 即使通道中的所有帧都已在 L1 上标记为已确认，该通道也可能无效且需要重新提交。
+// 如果待处理通道已超时，则此函数可能会重置待处理通道。
 func (s *channelManager) TxConfirmed(_id txID, inclusionBlock eth.BlockID) {
+	// 加锁以确保并发安全
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 将 txID 转换为字符串形式
 	id := _id.String()
+	// 检查是否存在与该交易 ID 关联的通道
 	if channel, ok := s.txChannels[id]; ok {
+		// 从 txChannels 映射中删除该交易 ID
 		delete(s.txChannels, id)
+		// 调用通道的 TxConfirmed 方法,处理已确认的交易
+		// done 表示通道是否已完成,blocks 是可能需要重新排队的区块
 		done, blocks := channel.TxConfirmed(id, inclusionBlock)
+		// 将可能需要重新处理的区块添加到区块队列的前面
 		s.blocks = append(blocks, s.blocks...)
 		if done {
+			// 如果通道已完成,从待处理通道列表中移除
 			s.removePendingChannel(channel)
 		}
 	} else {
+		// 如果找不到与该交易 ID 关联的通道,记录警告日志
 		s.log.Warn("transaction from unknown channel marked as confirmed", "id", id)
 	}
+	// 记录批次交易提交的指标
 	s.metr.RecordBatchTxSubmitted()
 	s.log.Debug("marked transaction as confirmed", "id", id, "block", inclusionBlock)
 }
 
 // removePendingChannel removes the given completed channel from the manager's state.
-// 从管理器状态中删除给定的完成通道。
+// removePendingChannel 从管理器状态中删除给定的完成通道。
 func (s *channelManager) removePendingChannel(channel *channel) {
+	// 1. 检查并清除当前通道
+	// 如果给定的通道是当前正在处理的通道,将其设置为 nil
 	if s.currentChannel == channel {
 		s.currentChannel = nil
 	}
+	// 2. 在通道队列中查找给定通道的索引
 	index := -1
 	for i, c := range s.channelQueue {
 		if c == channel {
@@ -154,10 +178,13 @@ func (s *channelManager) removePendingChannel(channel *channel) {
 			break
 		}
 	}
+	// 3. 如果在队列中找不到该通道,记录警告并返回
 	if index < 0 {
 		s.log.Warn("channel not found in channel queue", "id", channel.ID())
 		return
 	}
+	// 4. 从通道队列中移除该通道
+	// 使用切片操作,将索引前后的元素拼接起来,effectively 删除该索引处的通道
 	s.channelQueue = append(s.channelQueue[:index], s.channelQueue[index+1:]...)
 }
 
@@ -190,20 +217,27 @@ func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 2. 获取准备好的通道
 	channel, err := s.getReadyChannel(l1Head)
 	if err != nil {
 		return emptyTxData, err
 	}
 	// If the channel has already started being submitted,
 	// return now and ensure no requeueing happens
+	// 3. 检查通道是否已开始提交
+	// 如果通道已经开始提交，直接返回下一个交易数据，不进行重新排队
 	if !channel.NoneSubmitted() {
 		return s.nextTxData(channel)
 	}
 
 	// Call provider method to reassess optimal DA type
+	// 4. 重新评估最优 DA 类型
+	// 调用提供者方法重新评估最优 DA 类型
 	newCfg := s.cfgProvider.ChannelConfig()
 
 	// No change:
+	// 5. 检查 DA 类型是否需要切换
+	// 如果 DA 类型没有变化，直接返回下一个交易数据
 	if newCfg.UseBlobs == s.defaultCfg.UseBlobs {
 		s.log.Debug("Recomputing optimal ChannelConfig: no need to switch DA type",
 			"useBlobs", s.defaultCfg.UseBlobs)
@@ -211,14 +245,18 @@ func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 	}
 
 	// Change:
+	// 6. DA 类型需要切换
 	s.log.Info("Recomputing optimal ChannelConfig: changing DA type and requeing blocks...",
 		"useBlobsBefore", s.defaultCfg.UseBlobs,
 		"useBlobsAfter", newCfg.UseBlobs)
+	// 7. 重新排队并更新配置
 	s.Requeue(newCfg)
+	// 8. 重新获取准备好的通道
 	channel, err = s.getReadyChannel(l1Head)
 	if err != nil {
 		return emptyTxData, err
 	}
+	// 9. 返回新配置下的下一个交易数据
 	return s.nextTxData(channel)
 }
 

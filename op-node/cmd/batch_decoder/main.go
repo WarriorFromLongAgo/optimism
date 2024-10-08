@@ -19,6 +19,10 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// 这个文件实现了批处理解码器的命令行工具,主要功能包括:
+// 获取指定范围内的批处理数据
+// 重新组装通道数据并解码批处理
+// 创建强制关闭通道的交易数据
 func main() {
 	app := cli.NewApp()
 	app.Name = "batch-decoder"

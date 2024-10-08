@@ -23,6 +23,7 @@ type TxManager struct {
 }
 
 // API provides a mock function with given fields:
+// 返回一个 RPC API 接口。
 func (_m *TxManager) API() rpc.API {
 	ret := _m.Called()
 
@@ -41,6 +42,7 @@ func (_m *TxManager) API() rpc.API {
 }
 
 // BlockNumber provides a mock function with given fields: ctx
+// 返回当前的区块号。
 func (_m *TxManager) BlockNumber(ctx context.Context) (uint64, error) {
 	ret := _m.Called(ctx)
 
@@ -69,11 +71,13 @@ func (_m *TxManager) BlockNumber(ctx context.Context) (uint64, error) {
 }
 
 // Close provides a mock function with given fields:
+// 关闭事务管理器。
 func (_m *TxManager) Close() {
 	_m.Called()
 }
 
 // From provides a mock function with given fields:
+// 返回事务发送者的地址。
 func (_m *TxManager) From() common.Address {
 	ret := _m.Called()
 
@@ -94,6 +98,7 @@ func (_m *TxManager) From() common.Address {
 }
 
 // IsClosed provides a mock function with given fields:
+// 检查事务管理器是否已关闭。
 func (_m *TxManager) IsClosed() bool {
 	ret := _m.Called()
 
@@ -112,6 +117,7 @@ func (_m *TxManager) IsClosed() bool {
 }
 
 // Send provides a mock function with given fields: ctx, candidate
+// 发送一个事务，并返回交易收据和可能的错误。
 func (_m *TxManager) Send(ctx context.Context, candidate txmgr.TxCandidate) (*types.Receipt, error) {
 	ret := _m.Called(ctx, candidate)
 
@@ -142,11 +148,13 @@ func (_m *TxManager) Send(ctx context.Context, candidate txmgr.TxCandidate) (*ty
 }
 
 // SendAsync provides a mock function with given fields: ctx, candidate, ch
+// 异步发送一个事务，结果通过通道返回。
 func (_m *TxManager) SendAsync(ctx context.Context, candidate txmgr.TxCandidate, ch chan txmgr.SendResponse) {
 	_m.Called(ctx, candidate, ch)
 }
 
 // SuggestGasPriceCaps provides a mock function with given fields: ctx
+// 建议gas价格上限，返回三个 *big.Int 值（可能代表基础费用、优先费用和总费用上限）和可能的错误。
 func (_m *TxManager) SuggestGasPriceCaps(ctx context.Context) (*big.Int, *big.Int, *big.Int, error) {
 	ret := _m.Called(ctx)
 
@@ -196,6 +204,7 @@ func (_m *TxManager) SuggestGasPriceCaps(ctx context.Context) (*big.Int, *big.In
 
 // NewTxManager creates a new instance of TxManager. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
+// 这是一个构造函数，用于创建 TxManager 的新实例。它设置了测试期望和清理函数。
 func NewTxManager(t interface {
 	mock.TestingT
 	Cleanup(func())

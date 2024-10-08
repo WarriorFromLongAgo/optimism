@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+//管理争议游戏
+
 const (
 	methodGameCount   = "gameCount"
 	methodGameAtIndex = "gameAtIndex"

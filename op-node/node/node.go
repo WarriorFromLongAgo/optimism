@@ -33,6 +33,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 )
 
+// 它实现了 Optimism 节点的核心功能
+
 var ErrAlreadyClosed = errors.New("node is already closed")
 
 type closableSafeDB interface {
@@ -96,6 +98,9 @@ var _ p2p.GossipIn = (*OpNode)(nil)
 // New creates a new OpNode instance.
 // The provided ctx argument is for the span of initialization only;
 // the node will immediately Stop(ctx) before finishing initialization if the context is canceled during initialization.
+// New 创建一个新的 OpNode 实例。
+// 提供的 ctx 参数仅用于初始化的跨度；
+// 确保如果无法初始化节点，则节点将在完成初始化之前立即 Stop(ctx)。
 func New(ctx context.Context, cfg *Config, log log.Logger, appVersion string, m *metrics.Metrics) (*OpNode, error) {
 	if err := cfg.Check(); err != nil {
 		return nil, err
@@ -114,6 +119,7 @@ func New(ctx context.Context, cfg *Config, log log.Logger, appVersion string, m 
 
 	err := n.init(ctx, cfg)
 	if err != nil {
+		// 确保如果无法初始化节点，我们始终关闭节点资源。
 		log.Error("Error initializing the rollup node", "err", err)
 		// ensure we always close the node resources if we fail to initialize the node.
 		if closeErr := n.Stop(ctx); closeErr != nil {
@@ -126,36 +132,48 @@ func New(ctx context.Context, cfg *Config, log log.Logger, appVersion string, m 
 
 func (n *OpNode) init(ctx context.Context, cfg *Config) error {
 	n.log.Info("Initializing rollup node", "version", n.appVersion)
+	// 初始化追踪器 (tracer)
 	if err := n.initTracer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the trace: %w", err)
 	}
+	// 初始化事件系统
 	n.initEventSystem()
+	// 初始化 L1 相关组件
 	if err := n.initL1(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init L1: %w", err)
 	}
+	// 初始化 L1 信标链 API
 	if err := n.initL1BeaconAPI(ctx, cfg); err != nil {
 		return err
 	}
+	// 初始化 L2 相关组件
 	if err := n.initL2(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init L2: %w", err)
 	}
+	// 初始化运行时配置
 	if err := n.initRuntimeConfig(ctx, cfg); err != nil { // depends on L2, to signal initial runtime values to
 		return fmt.Errorf("failed to init the runtime config: %w", err)
 	}
+	// 初始化 P2P 签名器
 	if err := n.initP2PSigner(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the P2P signer: %w", err)
 	}
+	// 初始化 P2P 网络栈
 	if err := n.initP2P(cfg); err != nil {
 		return fmt.Errorf("failed to init the P2P stack: %w", err)
 	}
 	// Only expose the server at the end, ensuring all RPC backend components are initialized.
+	// 初始化 RPC 服务器
 	if err := n.initRPCServer(cfg); err != nil {
 		return fmt.Errorf("failed to init the RPC server: %w", err)
 	}
+	// 初始化指标服务器
 	if err := n.initMetricsServer(cfg); err != nil {
 		return fmt.Errorf("failed to init the metrics server: %w", err)
 	}
+	// 记录应用版本信息和启动状态
 	n.metrics.RecordInfo(n.appVersion)
+	// 初始化性能分析 (PProf) 服务
 	n.metrics.RecordUp()
 	if err := n.initPProf(cfg); err != nil {
 		return fmt.Errorf("failed to init profiling: %w", err)
@@ -163,13 +181,20 @@ func (n *OpNode) init(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
+// initEventSystem 初始化事件系统：这个方法的主要目的是设置 OpNode 的事件系统。
 func (n *OpNode) initEventSystem() {
 	// This executor will be configurable in the future, for parallel event processing
+	// 创建事件执行器: 这一步创建了一个同步的全局事件执行器。
 	executor := event.NewGlobalSynchronous(n.resourcesCtx)
+	// 创建事件系统: 使用上一步创建的执行器和节点的日志器初始化事件系统。
 	sys := event.NewSystem(n.log, executor)
+	// 添加指标追踪器: 为事件系统添加一个指标追踪器,用于跟踪事件相关的指标。
 	sys.AddTracer(event.NewMetricsTracer(n.metrics))
+	// 注册节点作为事件处理器: 将节点本身注册为事件处理器,使其能够直接处理事件。
 	sys.Register("node", event.DeriverFunc(n.onEvent), event.DefaultRegisterOpts())
+	// 存储事件系统: 将创建的事件系统存储在 OpNode 结构体中,以供后续使用。
 	n.eventSys = sys
+	// 初始化事件排空器: 创建一个事件排空器,可能用于优雅关闭,确保在系统停止前处理所有事件。
 	n.eventDrain = executor
 }
 
@@ -183,21 +208,26 @@ func (n *OpNode) initTracer(ctx context.Context, cfg *Config) error {
 }
 
 func (n *OpNode) initL1(ctx context.Context, cfg *Config) error {
+	// 1. 设置 L1 客户端
 	l1Node, rpcCfg, err := cfg.L1.Setup(ctx, n.log, &cfg.Rollup)
 	if err != nil {
 		return fmt.Errorf("failed to get L1 RPC client: %w", err)
 	}
 
+	// 2. 创建 L1 数据源
 	n.l1Source, err = sources.NewL1Client(
 		client.NewInstrumentedRPC(l1Node, &n.metrics.RPCMetrics.RPCClientMetrics), n.log, n.metrics.L1SourceCache, rpcCfg)
 	if err != nil {
 		return fmt.Errorf("failed to create L1 source: %w", err)
 	}
 
+	// 3. 验证 L1 配置
 	if err := cfg.Rollup.ValidateL1Config(ctx, n.l1Source); err != nil {
 		return fmt.Errorf("failed to validate the L1 config: %w", err)
 	}
 
+	// 4. 设置 L1 订阅
+	// 4.1 订阅 L1 头部更新
 	// Keep subscribed to the L1 heads, which keeps the L1 maintainer pointing to the best headers to sync
 	n.l1HeadsSub = gethevent.ResubscribeErr(time.Second*10, func(ctx context.Context, err error) (gethevent.Subscription, error) {
 		if err != nil {
@@ -205,6 +235,7 @@ func (n *OpNode) initL1(ctx context.Context, cfg *Config) error {
 		}
 		return eth.WatchHeadChanges(ctx, n.l1Source, n.OnNewL1Head)
 	})
+	// 4.2 启动错误监听协程
 	go func() {
 		err, ok := <-n.l1HeadsSub.Err()
 		if !ok {
@@ -213,10 +244,12 @@ func (n *OpNode) initL1(ctx context.Context, cfg *Config) error {
 		n.log.Error("l1 heads subscription error", "err", err)
 	}()
 
+	// 4.3 设置 L1 安全区块轮询
 	// Poll for the safe L1 block and finalized block,
 	// which only change once per epoch at most and may be delayed.
 	n.l1SafeSub = eth.PollBlockChanges(n.log, n.l1Source, n.OnNewL1Safe, eth.Safe,
 		cfg.L1EpochPollInterval, time.Second*10)
+	// 4.4 设置 L1 最终确认区块轮询
 	n.l1FinalizedSub = eth.PollBlockChanges(n.log, n.l1Source, n.OnNewL1Finalized, eth.Finalized,
 		cfg.L1EpochPollInterval, time.Second*10)
 	return nil

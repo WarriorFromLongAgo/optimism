@@ -170,16 +170,20 @@ func (ea *L2EngineAPI) startBlock(parent common.Hash, attrs *eth.PayloadAttribut
 }
 
 func (ea *L2EngineAPI) endBlock() (*types.Block, error) {
+	// 检查是否存在正在构建的区块处理器
 	if ea.blockProcessor == nil {
 		return nil, fmt.Errorf("no block is being built currently (id %s)", ea.payloadID)
 	}
+	// 保存当前区块处理器的引用
 	processor := ea.blockProcessor
+	// 清空当前区块处理器，表示构建完成
 	ea.blockProcessor = nil
-
+	// 调用处理器的Assemble方法组装区块
 	block, err := processor.Assemble()
 	if err != nil {
 		return nil, fmt.Errorf("assemble block: %w", err)
 	}
+	// 返回组装好的区块
 	return block, nil
 }
 
@@ -494,6 +498,7 @@ func (ea *L2EngineAPI) newPayload(_ context.Context, payload *eth.ExecutionPaylo
 		return &eth.PayloadStatusV1{Status: eth.ExecutionAccepted}, nil
 	}
 	log.Trace("Inserting block without sethead", "hash", block.Hash(), "number", block.Number)
+	// 调用底层的共识引擎，生成区块
 	if err := ea.backend.InsertBlockWithoutSetHead(block); err != nil {
 		ea.log.Warn("NewPayloadV1: inserting block failed", "error", err)
 		// TODO not remembering the payload as invalid

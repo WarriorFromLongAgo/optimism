@@ -1,4 +1,11 @@
 # op-program
+op-program 是 Optimism 中的一个重要组件，主要用于执行和验证 L2 区块的状态转换
+
+实现一个防错程序，该程序通过汇总状态转换来验证来自 L1 输入的 L2 输出。
+然后，这个可验证的输出可以解决 L1 上的有争议的输出。
+
+该程序的设计使其能够以确定性的方式运行，这样使用相同输入数据的两次调用不仅会产生相同的输出，还会产生相同的程序执行轨迹。 这允许它作为争议解决过程的一部分在链上虚拟机中运行。
+
 
 Implements a fault proof program that runs through the rollup state-transition to verify an L2 output from L1 inputs.
 This verifiable output can then resolve a disputed output on L1.

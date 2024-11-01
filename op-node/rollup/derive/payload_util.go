@@ -12,6 +12,8 @@ import (
 
 // PayloadToBlockRef extracts the essential L2BlockRef information from an execution payload,
 // falling back to genesis information if necessary.
+// PayloadToBlockRef 从执行有效负载中提取必要的 L2BlockRef 信息，
+// 必要时返回到创世信息。
 func PayloadToBlockRef(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error) {
 	genesis := &rollupCfg.Genesis
 	var l1Origin eth.BlockID
@@ -51,30 +53,41 @@ func PayloadToBlockRef(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) 
 	}, nil
 }
 
+// PayloadToSystemConfig 从给定的执行有效负载（ExecutionPayload）中提取系统配置（SystemConfig）。它处理了创世块和非创世块的情况，并从区块的第一个交易中解析出系统配置信息。
 func PayloadToSystemConfig(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.SystemConfig, error) {
+	// 检查是否为创世块
 	if uint64(payload.BlockNumber) == rollupCfg.Genesis.L2.Number {
+		// 验证创世块哈希
 		if payload.BlockHash != rollupCfg.Genesis.L2.Hash {
 			return eth.SystemConfig{}, fmt.Errorf(
 				"expected L2 genesis hash to match L2 block at genesis block number %d: %s <> %s",
 				rollupCfg.Genesis.L2.Number, payload.BlockHash, rollupCfg.Genesis.L2.Hash)
 		}
+		// 返回创世块的系统配置
 		return rollupCfg.Genesis.SystemConfig, nil
 	} else {
+		// 非创世块的处理
+		// 确保区块包含至少一个交易
 		if len(payload.Transactions) == 0 {
 			return eth.SystemConfig{}, fmt.Errorf("l2 block is missing L1 info deposit tx, block hash: %s", payload.BlockHash)
 		}
+		// 解析第一个交易
 		var tx types.Transaction
 		if err := tx.UnmarshalBinary(payload.Transactions[0]); err != nil {
 			return eth.SystemConfig{}, fmt.Errorf("failed to decode first tx to read l1 info from: %w", err)
 		}
+		// 验证交易类型
 		if tx.Type() != types.DepositTxType {
 			return eth.SystemConfig{}, fmt.Errorf("first payload tx has unexpected tx type: %d", tx.Type())
 		}
+		// 从交易数据中解析 L1 区块信息
 		info, err := L1BlockInfoFromBytes(rollupCfg, uint64(payload.Timestamp), tx.Data())
 		if err != nil {
 			return eth.SystemConfig{}, fmt.Errorf("failed to parse L1 info deposit tx from L2 block: %w", err)
 		}
+		// 处理 Ecotone 升级后的特殊情况
 		if isEcotoneButNotFirstBlock(rollupCfg, uint64(payload.Timestamp)) {
+			// 将 Ecotone 值转换回编码的标量
 			// Translate Ecotone values back into encoded scalar if needed.
 			// We do not know if it was derived from a v0 or v1 scalar,
 			// but v1 is fine, a 0 blob base fee has the same effect.

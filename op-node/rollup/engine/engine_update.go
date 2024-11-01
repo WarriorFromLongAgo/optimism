@@ -81,7 +81,15 @@ const (
 
 // startPayload starts an execution payload building process in the provided Engine, with the given attributes.
 // The severity of the error is distinguished to determine whether the same payload attributes may be re-attempted later.
+// startPayload 使用给定的属性在提供的引擎中启动执行有效负载构建过程。
+// 区分错误的严重程度，以确定是否可以稍后重新尝试相同的有效负载属性。
+// 在执行引擎中启动一个新的执行有效载荷（payload）构建过程。
+// 使用给定的分叉选择状态（ForkchoiceState）和有效载荷属性（PayloadAttributes）来更新执行引擎的状态。
+// 根据执行引擎的响应，判断有效载荷构建是否成功，并返回相应的结果或错误。
+// 对不同类型的错误进行分类，以便调用者可以决定是否可以稍后重试相同的有效载荷属性。
 func startPayload(ctx context.Context, eng ExecEngine, fc eth.ForkchoiceState, attrs *eth.PayloadAttributes) (id eth.PayloadID, errType BlockInsertionErrType, err error) {
+	// 在 L2 系统的执行流程中扮演着关键角色。它主要用于更新执行引擎的分叉选择状态，并可能启动新区块的构建过程。
+	// ForkchoiceUpdate 调用会将最新的分叉选择状态（包括当前的头部区块、安全区块和最终确认区块）发送给执行引擎。
 	fcRes, err := eng.ForkchoiceUpdate(ctx, &fc, attrs)
 	if err != nil {
 		var inputErr eth.InputError

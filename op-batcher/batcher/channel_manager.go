@@ -196,7 +196,9 @@ func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 		s.log.Trace("no next tx data")
 		return txData{}, io.EOF // TODO: not enough data error instead
 	}
+	// 从通道中获取下一个待发送的交易数据
 	tx := channel.NextTxData()
+	// 将交易 ID 与通道关联，用于后续的确认处理
 	s.txChannels[tx.ID().String()] = channel
 	return tx, nil
 }
@@ -218,6 +220,7 @@ func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// 2. 获取准备好的通道
+	// 获取一个准备好的通道，这可能涉及处理待处理的区块
 	channel, err := s.getReadyChannel(l1Head)
 	if err != nil {
 		return emptyTxData, err
@@ -271,6 +274,7 @@ func (s *channelManager) TxData(l1Head eth.BlockID) (txData, error) {
 // there is no channel with txData
 // 当没有带有 txData 的通道时，始终返回 nil 和 io.EOF 标记错误
 func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
+	// 查找已有的准备好的通道
 	var firstWithTxData *channel
 	for _, ch := range s.channelQueue {
 		if ch.HasTxData() {
@@ -278,15 +282,16 @@ func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
 			break
 		}
 	}
-
+	// 检查是否有待处理的数据
 	dataPending := firstWithTxData != nil
 	s.log.Debug("Requested tx data", "l1Head", l1Head, "txdata_pending", dataPending, "blocks_pending", len(s.blocks))
 
 	// Short circuit if there is pending tx data or the channel manager is closed
+	// 如果有待处理的数据,直接返回
 	if dataPending {
 		return firstWithTxData, nil
 	}
-
+	// 检查 channelManager 是否已关闭：
 	if s.closed {
 		return nil, io.EOF
 	}
@@ -294,14 +299,17 @@ func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
 	// No pending tx data, so we have to add new blocks to the channel
 
 	// If we have no saved blocks, we will not be able to create valid frames
+	// 检查是否有待处理的区块：
 	if len(s.blocks) == 0 {
 		return nil, io.EOF
 	}
 
+	// 确保有一个可用的通道
 	if err := s.ensureChannelWithSpace(l1Head); err != nil {
 		return nil, err
 	}
 
+	// 处理待处理的区块，将它们添加到当前通道
 	if err := s.processBlocks(); err != nil {
 		return nil, err
 	}
@@ -309,12 +317,17 @@ func (s *channelManager) getReadyChannel(l1Head eth.BlockID) (*channel, error) {
 	// Register current L1 head only after all pending blocks have been
 	// processed. Even if a timeout will be triggered now, it is better to have
 	// all pending blocks be included in this channel for submission.
+	// 注册最新的 L1 区块
+	// 仅在所有待处理区块都处理完毕后才注册当前 L1 头。
+	// 即使现在会触发超时，最好还是将所有待处理区块都包含在此通道中进行提交。
 	s.registerL1Block(l1Head)
 
+	// 生成帧
 	if err := s.outputFrames(); err != nil {
 		return nil, err
 	}
 
+	// 如果当前通道有可用的交易数据，返回它
 	if s.currentChannel.HasTxData() {
 		return s.currentChannel, nil
 	}
@@ -380,8 +393,11 @@ func (s *channelManager) processBlocks() error {
 		_chFullErr  *ChannelFullError // throw away, just for type checking
 		latestL2ref eth.L2BlockRef
 	)
+	// 遍历待处理的L2区块:
 	for i, block := range s.blocks {
+		// 将 L2 区块添加到当前通道
 		l1info, err := s.currentChannel.AddBlock(block)
+		// 如果通道已满，停止添加
 		if errors.As(err, &_chFullErr) {
 			// current block didn't get added because channel is already full
 			break
@@ -389,20 +405,24 @@ func (s *channelManager) processBlocks() error {
 			return fmt.Errorf("adding block[%d] to channel builder: %w", i, err)
 		}
 		s.log.Debug("Added block to channel", "id", s.currentChannel.ID(), "block", eth.ToBlockID(block))
-
+		// 增加已添加区块的计数
 		blocksAdded += 1
+		// 更新最新的 L2 区块引用
 		latestL2ref = l2BlockRefFromBlockAndL1Info(block, l1info)
 		s.metr.RecordL2BlockInChannel(block)
 		// current block got added but channel is now full
+		// 检查通道是否已满,如果满了就停止添加
 		if s.currentChannel.IsFull() {
 			break
 		}
 	}
 
+	// // 所有区块都处理完,重用切片
 	if blocksAdded == len(s.blocks) {
 		// all blocks processed, reuse slice
 		s.blocks = s.blocks[:0]
 	} else {
+		// 移除已处理的区块
 		// remove processed blocks
 		s.blocks = s.blocks[blocksAdded:]
 	}
@@ -425,6 +445,7 @@ func (s *channelManager) processBlocks() error {
 // outputFrames generates frames for the current channel, and computes and logs the compression ratio
 // outputFrames 为当前通道生成帧，并计算和记录压缩比
 func (s *channelManager) outputFrames() error {
+	// 为当前通道生成帧
 	if err := s.currentChannel.OutputFrames(); err != nil {
 		return fmt.Errorf("creating frames with channel builder: %w", err)
 	}

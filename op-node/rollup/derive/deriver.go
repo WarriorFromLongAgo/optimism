@@ -32,6 +32,8 @@ func (d DeriverMoreEvent) String() string {
 	return "deriver-more"
 }
 
+// ConfirmReceivedAttributesEvent 发出信号表示派生管道可能生成新属性。
+// 发出 DerivedAttributesEvent 后，在确认接收之前不会生成任何新属性。
 // ConfirmReceivedAttributesEvent signals that the derivation pipeline may generate new attributes.
 // After emitting DerivedAttributesEvent, no new attributes will be generated until a confirmation of reception.
 type ConfirmReceivedAttributesEvent struct{}

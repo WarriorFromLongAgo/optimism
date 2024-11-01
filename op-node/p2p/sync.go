@@ -367,15 +367,19 @@ func (s *SyncClient) Close() error {
 }
 
 func (s *SyncClient) RequestL2Range(ctx context.Context, start, end eth.L2BlockRef) (uint64, error) {
+	// 检查是否是开放式同步请求
 	if end == (eth.L2BlockRef{}) {
 		s.log.Debug("P2P sync client received range signal, but cannot sync open-ended chain: need sync target to verify blocks through parent-hashes", "start", start)
 		return 0, nil
 	}
+	// 生成唯一的请求ID
 	// Create shared rangeReqId so associated peerRequests can all be cancelled by setting a single flag
 	rangeReqId := atomic.AddUint64(&s.rangeReqId, 1)
+	// 标记请求为活跃状态
 	// need to flag request as active before adding request to s.rangeRequests to avoid race
 	s.activeRangeRequests.set(rangeReqId, true)
 
+	// 尝试将请求发送到主循环
 	// synchronize requests with the main loop for state access
 	select {
 	case s.rangeRequests <- rangeRequest{start: start.Number, end: end, id: rangeReqId}:

@@ -78,7 +78,10 @@ func NewL1Client(client client.RPC, log log.Logger, metrics caching.Metrics, con
 
 // L1BlockRefByLabel returns the [eth.L1BlockRef] for the given block label.
 // Notice, we cannot cache a block reference by label because labels are not guaranteed to be unique.
+// L1BlockRefByLabel 返回给定块标签的 [eth.L1BlockRef]。
+// 注意，我们不能通过标签缓存块引用，因为标签不能保证是唯一的。
 func (s *L1Client) L1BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L1BlockRef, error) {
+	// 获取 L1 区块信息的
 	info, err := s.InfoByLabel(ctx, label)
 	if err != nil {
 		// Both geth and erigon like to serve non-standard errors for the safe and finalized heads, correct that.

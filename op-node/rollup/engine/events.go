@@ -32,6 +32,7 @@ func (ev ForkchoiceRequestEvent) String() string {
 	return "forkchoice-request"
 }
 
+// ForkchoiceUpdateEvent 是一个关键的事件，用于更新区块链的分叉选择状态。
 type ForkchoiceUpdateEvent struct {
 	UnsafeL2Head, SafeL2Head, FinalizedL2Head eth.L2BlockRef
 }
@@ -40,6 +41,11 @@ func (ev ForkchoiceUpdateEvent) String() string {
 	return "forkchoice-update"
 }
 
+// PromoteUnsafeEvent 发出信号，表示给定的块现在可能成为规范的不安全块。
+// 这是 forkchoice 前的更新；更改可能尚未反映在 EL 中。
+// 请注意，旧的事件前重构代码路径（处理 P2P 块）会触发此事件，
+// 但手动与较新的事件处理代码路径重复。
+// 参见 EngineController.InsertUnsafePayload。
 // PromoteUnsafeEvent signals that the given block may now become a canonical unsafe block.
 // This is pre-forkchoice update; the change may not be reflected yet in the EL.
 // Note that the legacy pre-event-refactor code-path (processing P2P blocks) does fire this,
@@ -62,6 +68,8 @@ func (ev RequestCrossUnsafeEvent) String() string {
 
 // UnsafeUpdateEvent signals that the given block is now considered safe.
 // This is pre-forkchoice update; the change may not be reflected yet in the EL.
+// UnsafeUpdateEvent 表示给定的块现在被认为是安全的。
+// 这是 forkchoice 之前的更新；更改可能尚未反映在 EL 中。
 type UnsafeUpdateEvent struct {
 	Ref eth.L2BlockRef
 }
@@ -90,8 +98,10 @@ func (ev CrossUnsafeUpdateEvent) String() string {
 }
 
 type PendingSafeUpdateEvent struct {
+	// 新的待定安全区块引用
 	PendingSafe eth.L2BlockRef
-	Unsafe      eth.L2BlockRef // tip, added to the signal, to determine if there are existing blocks to consolidate
+	// 当前不安全头部引用
+	Unsafe eth.L2BlockRef // tip, added to the signal, to determine if there are existing blocks to consolidate
 }
 
 func (ev PendingSafeUpdateEvent) String() string {
@@ -221,6 +231,7 @@ func (ev EngineResetConfirmedEvent) String() string {
 }
 
 // PromoteFinalizedEvent signals that a block can be marked as finalized.
+// PromoteFinalizedEvent 表示一个块可以被标记为最终确定。
 type PromoteFinalizedEvent struct {
 	Ref eth.L2BlockRef
 }
@@ -269,6 +280,8 @@ func (d *EngDeriver) AttachEmitter(em event.Emitter) {
 func (d *EngDeriver) OnEvent(ev event.Event) bool {
 	switch x := ev.(type) {
 	case TryBackupUnsafeReorgEvent:
+		// 如果我们不需要调用 FCU 来使用 backupUnsafe 恢复 unsafeHead，请继续，因为
+		// 这是一个无操作（除了在 backupUnsafe 为空但调用 TryBackupUnsafeReorg 时纠正无效状态）。
 		// If we don't need to call FCU to restore unsafeHead using backupUnsafe, keep going b/c
 		// this was a no-op(except correcting invalid state when backupUnsafe is empty but TryBackupUnsafeReorg called).
 		fcuCalled, err := d.ec.TryBackupUnsafeReorg(d.ctx)
@@ -276,6 +289,9 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 		// But that combination is not actually a code-path in TryBackupUnsafeReorg.
 		// We should drop fcuCalled, and make the function emit events directly,
 		// once there are no more synchronous callers.
+		// 此处处理遗留问题：如果 fcuCalled 为 false，则过去会跳过错误处理。
+		// 但该组合实际上不是 TryBackupUnsafeReorg 中的代码路径。
+		// 一旦不再有同步调用者，我们就应该删除 fcuCalled，并让函数直接发出事件。
 		if !fcuCalled && err != nil {
 			d.log.Crit("unexpected TryBackupUnsafeReorg error after no FCU call", "err", err)
 		}
@@ -292,6 +308,8 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 	case TryUpdateEngineEvent:
 		// If we don't need to call FCU, keep going b/c this was a no-op. If we needed to
 		// perform a network call, then we should yield even if we did not encounter an error.
+		// 如果我们不需要调用 FCU，请继续，因为这是一个无操作。如果我们需要
+		// 执行网络调用，那么即使没有遇到错误，我们也应该放弃。
 		if err := d.ec.TryUpdateEngine(d.ctx); err != nil && !errors.Is(err, ErrNoFCUNeeded) {
 			if errors.Is(err, derive.ErrReset) {
 				d.emitter.Emit(rollup.ResetEvent{Err: err})
@@ -342,6 +360,7 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 		d.emitter.Emit(EngineResetConfirmedEvent(x))
 	case PromoteUnsafeEvent:
 		// Backup unsafeHead when new block is not built on original unsafe head.
+		// 当新块没有建立在原始不安全头上时，备份 unsafeHead。
 		if d.ec.unsafeHead.Number >= x.Ref.Number {
 			d.ec.SetBackupUnsafeL2Head(d.ec.unsafeHead, false)
 		}
@@ -378,6 +397,8 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 	case PromotePendingSafeEvent:
 		// Only promote if not already stale.
 		// Resets/overwrites happen through engine-resets, not through promotion.
+		// 仅当尚未过时才进行提升。
+		// 重置/覆盖通过引擎重置进行，而不是通过提升进行。
 		if x.Ref.Number > d.ec.PendingSafeL2Head().Number {
 			d.ec.SetPendingSafeL2Head(x.Ref)
 			d.emitter.Emit(PendingSafeUpdateEvent{
@@ -392,33 +413,42 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 			})
 		}
 	case PromoteLocalSafeEvent:
+		// 设置本地安全头
 		d.ec.SetLocalSafeHead(x.Ref)
+		// 发出本地安全更新事件
 		d.emitter.Emit(LocalSafeUpdateEvent(x))
 	case LocalSafeUpdateEvent:
 		// pre-interop everything that is local-safe is also immediately cross-safe.
+		// 互操作前，所有本地安全的事物也立即是交叉安全的。
 		if !d.cfg.IsInterop(x.Ref.Time) {
 			d.emitter.Emit(PromoteSafeEvent(x))
 		}
 	case PromoteSafeEvent:
 		d.ec.SetSafeHead(x.Ref)
 		// Finalizer can pick up this safe cross-block now
+		// Finalizer 现在可以拾取这个安全的跨块
 		d.emitter.Emit(SafeDerivedEvent{Safe: x.Ref, DerivedFrom: x.DerivedFrom})
 		d.emitter.Emit(CrossSafeUpdateEvent{
 			CrossSafe: d.ec.SafeL2Head(),
 			LocalSafe: d.ec.LocalSafeL2Head(),
 		})
 		// Try to apply the forkchoice changes
+		// 尝试应用 forkchoice 更改
 		d.emitter.Emit(TryUpdateEngineEvent{})
 	case PromoteFinalizedEvent:
+		// 检查是否试图回滚已确认的区块（不允许）
 		if x.Ref.Number < d.ec.Finalized().Number {
 			d.log.Error("Cannot rewind finality,", "ref", x.Ref, "finalized", d.ec.Finalized())
 			return true
 		}
+		// 确保要最终确认的区块已经是安全的
 		if x.Ref.Number > d.ec.SafeL2Head().Number {
 			d.log.Error("Block must be safe before it can be finalized", "ref", x.Ref, "safe", d.ec.SafeL2Head())
 			return true
 		}
+		// 设置新的最终确认区块头
 		d.ec.SetFinalizedHead(x.Ref)
+		// 触发引擎状态更新事件
 		// Try to apply the forkchoice changes
 		d.emitter.Emit(TryUpdateEngineEvent{})
 	case CrossUpdateRequestEvent:
@@ -459,12 +489,19 @@ func (d *EngDeriver) OnEvent(ev event.Event) bool {
 }
 
 type ResetEngineControl interface {
+	// SetUnsafeHead (): 设置不安全头部。
 	SetUnsafeHead(eth.L2BlockRef)
+	// SetSafeHead (): 设置安全头部。
 	SetSafeHead(eth.L2BlockRef)
+	// SetFinalizedHead (): 设置最终确认头部。
 	SetFinalizedHead(eth.L2BlockRef)
+	// SetLocalSafeHead (): 设置本地安全头部。
 	SetLocalSafeHead(ref eth.L2BlockRef)
+	// SetCrossUnsafeHead (): 设置跨链不安全头部。
 	SetCrossUnsafeHead(ref eth.L2BlockRef)
+	// SetBackupUnsafeL2Head ():  设置备份的不安全 L2 头部。
 	SetBackupUnsafeL2Head(block eth.L2BlockRef, triggerReorg bool)
+	// SetPendingSafeL2Head (): 设置待定的安全 L2 头部。
 	SetPendingSafeL2Head(eth.L2BlockRef)
 }
 

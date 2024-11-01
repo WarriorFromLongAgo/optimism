@@ -16,6 +16,8 @@ import (
 
 // AttributesMatchBlock checks if the L2 attributes pre-inputs match the output
 // nil if it is a match. If err is not nil, the error contains the reason for the mismatch
+// AttributesMatchBlock 检查 L2 属性预输入是否与输出匹配
+// 如果匹配则为 nil。如果 err 不为 nil，则错误包含不匹配的原因
 func AttributesMatchBlock(rollupCfg *rollup.Config, attrs *eth.PayloadAttributes, parentHash common.Hash, envelope *eth.ExecutionPayloadEnvelope, l log.Logger) error {
 	block := envelope.ExecutionPayload
 
@@ -38,7 +40,6 @@ func AttributesMatchBlock(rollupCfg *rollup.Config, attrs *eth.PayloadAttributes
 				"missingUnsafeHashes", missingUnsafeHashes,
 			)
 		}
-
 		return fmt.Errorf("transaction count does not match. expected: %d. got: %d", len(attrs.Transactions), len(block.Transactions))
 	}
 	for i, otx := range attrs.Transactions {
@@ -112,6 +113,7 @@ func checkWithdrawalsMatch(attrWithdrawals *types.Withdrawals, blockWithdrawals 
 
 // logL1InfoTxns reports the values from the L1 info tx when they differ to aid
 // debugging. This check is the one that has been most frequently triggered.
+// logL1InfoTxns 报告 L1 info tx 的值，当它们不同时，以帮助调试。此检查是最常触发的检查。
 func logL1InfoTxns(rollupCfg *rollup.Config, l log.Logger, l2Number, l2Timestamp uint64, safeTx, unsafeTx hexutil.Bytes) {
 	// First decode into *types.Transaction to get the tx data.
 	var safeTxValue, unsafeTxValue types.Transaction

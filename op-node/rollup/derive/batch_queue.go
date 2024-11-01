@@ -90,6 +90,8 @@ func (bq *BatchQueue) popNextBatch(parent eth.L2BlockRef) *SingularBatch {
 	return nextBatch
 }
 
+// NextBatch 在给定的安全头上返回下一个有效批次。
+// 它还返回布尔值，指示该批次是否是批次中的最后一个块。
 // NextBatch return next valid batch upon the given safe head.
 // It also returns the boolean that indicates if the batch is the last block in the batch.
 func (bq *BatchQueue) NextBatch(ctx context.Context, parent eth.L2BlockRef) (*SingularBatch, bool, error) {

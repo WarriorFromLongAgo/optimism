@@ -67,6 +67,9 @@ type L1BlockRefsSource interface {
 // PollBlockChanges opens a polling loop to fetch the L1 block reference with the given label,
 // on provided interval and with request timeout. Results are returned with provided callback fn,
 // which may block to pause/back-pressure polling.
+// PollBlockChanges 打开一个轮询循环，以获取具有给定标签的 L1 块引用，
+// 在提供的间隔和请求超时内。结果通过提供的回调 fn 返回，
+// 可能会阻塞以暂停/背压轮询。
 func PollBlockChanges(log log.Logger, src L1BlockRefsSource, fn HeadSignalFn,
 	label BlockLabel, interval time.Duration, timeout time.Duration) ethereum.Subscription {
 	return event.NewSubscription(func(quit <-chan struct{}) error {
@@ -87,15 +90,19 @@ func PollBlockChanges(log log.Logger, src L1BlockRefsSource, fn HeadSignalFn,
 			}
 		}()
 
+		// 创建一个定时器，按照指定的间隔触发。
+		// 每次触发时，调用 L1BlockRefByLabel 方法获取指定标签（safe 或 finalized）的最新区块。
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				reqCtx, reqCancel := context.WithTimeout(eventsCtx, timeout)
+				// 如果成功获取区块信息，则调用提供的回调函数 fn 处理新的区块信息。
 				ref, err := src.L1BlockRefByLabel(reqCtx, label)
 				reqCancel()
 				if err != nil {
+					// 如果获取区块失败，会记录警告日志但继续轮询。
 					log.Warn("failed to poll L1 block", "label", label, "err", err)
 				} else {
 					fn(eventsCtx, ref)

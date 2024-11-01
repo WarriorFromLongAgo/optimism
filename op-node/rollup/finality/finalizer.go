@@ -137,16 +137,38 @@ func (ev TryFinalizeEvent) String() string {
 func (fi *Finalizer) OnEvent(ev event.Event) bool {
 	switch x := ev.(type) {
 	case FinalizeL1Event:
+		// 处理 L1 链的最终确认事件
+		// 更新 finalizer 中的已确认 L1 区块信息
+		// 重置 triedFinalizeAt 以允许新的确认尝试
+		// 触发 TryFinalizeEvent 来尝试确认相关的 L2 区块
 		fi.onL1Finalized(x.FinalizedL1)
 	case engine.SafeDerivedEvent:
+		// 处理安全派生区块事件
+		// 调用 onDerivedSafeBlock 来记录 L2 安全区块与其派生自的 L1 区块之间的关系
+		// 用于跟踪可以被最终确认的 L2 区块
 		fi.onDerivedSafeBlock(x.Safe, x.DerivedFrom)
 	case derive.DeriverIdleEvent:
+		// 处理派生器空闲事件
+		// 当派生管道没有新数据时触发
+		// 检查是否可以进行区块最终确认
+		// 如果条件合适，触发 TryFinalizeEvent
 		fi.onDerivationIdle(x.Origin)
 	case rollup.ResetEvent:
+		// 处理重置事件
+		// 清除最近用于最终确认的安全 L2 区块历史
+		// 重置 triedFinalizeAt
+		// 防止已重组的 L2 区块被最终确认
 		fi.onReset()
 	case TryFinalizeEvent:
+		// 尝试最终确认事件
+		// 触发 tryFinalize 过程
+		// 检查并确认满足条件的 L2 区块
+		// 验证 L1 链的最终确认信号
 		fi.tryFinalize()
 	case engine.ForkchoiceUpdateEvent:
+		// 更新分叉选择事件
+		// 更新 lastFinalizedL2 记录
+		// 跟踪最新已最终确认的 L2 区块头
 		fi.lastFinalizedL2 = x.FinalizedL2Head
 	default:
 		return false
@@ -154,6 +176,7 @@ func (fi *Finalizer) OnEvent(ev event.Event) bool {
 	return true
 }
 
+// onL1Finalized 应用 L1 最终性信号
 // onL1Finalized applies a L1 finality signal
 func (fi *Finalizer) onL1Finalized(l1Origin eth.L1BlockRef) {
 	fi.mu.Lock()
@@ -177,6 +200,14 @@ func (fi *Finalizer) onL1Finalized(l1Origin eth.L1BlockRef) {
 	fi.emitter.Emit(TryFinalizeEvent{})
 }
 
+// 当管道耗尽新数据（即没有更多 L2 块可从中派生）时，将调用 onDerivationIdle。
+//
+// 由于最终性适用于完全从同一块派生的所有 L2 块，
+// 最好仅在从 L1 块派生已耗尽后才进行检查。
+//
+// 这将查看到目前为止已缓冲的内容，
+// 健全性检查我们是否在最终确定的 L1 链上，
+// 并最终确定完全从已知最终确定的 L1 块派生的任何 L2 块。
 // onDerivationIdle is called when the pipeline is exhausted of new data (i.e. no more L2 blocks to derive from).
 //
 // Since finality applies to all L2 blocks fully derived from the same block,
@@ -200,21 +231,29 @@ func (fi *Finalizer) onDerivationIdle(derivedFrom eth.L1BlockRef) {
 	fi.emitter.Emit(TryFinalizeEvent{})
 }
 
+// 主要功能是尝试对 L2 区块进行最终确认
 func (fi *Finalizer) tryFinalize() {
+	// 加锁保护共享数据
 	fi.mu.Lock()
 	defer fi.mu.Unlock()
 
+	// 获取上次已确认的 L2 区块（如果启动后还未确认过则为空）
 	// overwritten if we finalize
+	// 如果自启动以来没有完成任何操作，则可能为零。
 	finalizedL2 := fi.lastFinalizedL2 // may be zeroed if nothing was finalized since startup.
 	var finalizedDerivedFrom eth.BlockID
 	// go through the latest inclusion data, and find the last L2 block that was derived from a finalized L1 block
+	// 浏览最新的包含数据，并找到从最终确定的 L1 块派生的最后一个 L2 块
+	// 遍历最新的包含数据，找到从已确认 L1 区块派生的最新 L2 区块
 	for _, fd := range fi.finalityData {
 		if fd.L2Block.Number > finalizedL2.Number && fd.L1Block.Number <= fi.finalizedL1.Number {
 			finalizedL2 = fd.L2Block
 			finalizedDerivedFrom = fd.L1Block
+			// 继续遍历，可能有更新的可确认区块
 			// keep iterating, there may be later L2 blocks that can also be finalized
 		}
 	}
+	// 如果找到了可以确认的区块
 	if finalizedDerivedFrom != (eth.BlockID{}) {
 		ctx, cancel := context.WithTimeout(fi.ctx, time.Second*10)
 		defer cancel()
@@ -222,11 +261,17 @@ func (fi *Finalizer) tryFinalize() {
 		// Even though the signal is trusted and we do the below check also,
 		// the signal itself has to be canonical to proceed.
 		// TODO(#10724): This check could be removed if the finality signal is fully trusted, and if tests were more flexible for this case.
+		// 对 L1 的最终性信号进行健全性检查。
+		// 即使信号是可信的，我们也进行以下检查，
+		// 信号本身必须是规范的才能继续进行。
+		// TODO(#10724)：如果最终性信号完全可信，并且测试在这种情况下更灵活，则可以删除此检查。
+		// 验证 L1 的最终确认信号
 		signalRef, err := fi.l1Fetcher.L1BlockRefByNumber(ctx, fi.finalizedL1.Number)
 		if err != nil {
 			fi.emitter.Emit(rollup.L1TemporaryErrorEvent{Err: fmt.Errorf("failed to check if on finalizing L1 chain, could not fetch block %d: %w", fi.finalizedL1.Number, err)})
 			return
 		}
+		// 确保最终确认信号与当前链匹配
 		if signalRef.Hash != fi.finalizedL1.Hash {
 			fi.emitter.Emit(rollup.ResetEvent{Err: fmt.Errorf("need to reset, we assumed %s is finalized, but canonical chain is %s", fi.finalizedL1, signalRef)})
 			return
@@ -234,16 +279,19 @@ func (fi *Finalizer) tryFinalize() {
 
 		// Sanity check we are indeed on the finalizing chain, and not stuck on something else.
 		// We assume that the block-by-number query is consistent with the previously received finalized chain signal
+		// 验证我们在正确的确认链上
 		derivedRef, err := fi.l1Fetcher.L1BlockRefByNumber(ctx, finalizedDerivedFrom.Number)
 		if err != nil {
 			fi.emitter.Emit(rollup.L1TemporaryErrorEvent{Err: fmt.Errorf("failed to check if on finalizing L1 chain, could not fetch block %d: %w", finalizedDerivedFrom.Number, err)})
 			return
 		}
+		// 确保派生区块在正确的链上
 		if derivedRef.Hash != finalizedDerivedFrom.Hash {
 			fi.emitter.Emit(rollup.ResetEvent{Err: fmt.Errorf("need to reset, we are on %s, not on the finalizing L1 chain %s (towards %s)",
 				finalizedDerivedFrom, derivedRef, fi.finalizedL1)})
 			return
 		}
+		// 发出最终确认事件
 		fi.emitter.Emit(engine.PromoteFinalizedEvent{Ref: finalizedL2})
 	}
 }

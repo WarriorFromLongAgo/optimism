@@ -20,6 +20,9 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
+// 1秒 = 1000毫秒
+// 50毫秒 = 0.05秒
+// sealingDuration 定义密封区块所需的预期时间
 // sealingDuration defines the expected time it takes to seal the block
 const sealingDuration = time.Millisecond * 50
 
@@ -163,6 +166,46 @@ func (d *Sequencer) OnEvent(ev event.Event) bool {
 		}
 	}()
 
+	// BuildStartedEvent → BuildSealedEvent → PayloadSuccessEvent
+	//							↓
+	//					PayloadInvalidEvent (如果失败)
+	//							↓
+	//					SequencerActionEvent (触发新的尝试)
+	//
+	// ForkchoiceUpdateEvent (随时可能发生)
+	// ResetEvent (出现严重问题时触发)
+
+	// 正常流程：
+	// BuildStartedEvent
+	// 	 → BuildSealedEvent
+	// 		→ PayloadSuccessEvent
+	//
+	// 错误处理流程：
+	// BuildStartedEvent
+	// 	→ BuildSealedEvent
+	// 		→ PayloadInvalidEvent
+	// 			→ SequencerActionEvent(重试)
+	//
+	// 随时可能发生：
+	// ForkchoiceUpdateEvent (链头更新)
+
+	//// 1. 开始构建新区块
+	//d.emitter.Emit(engine.BuildStartEvent{...})
+	//
+	//// 2. 区块构建完成，准备封装
+	//d.emitter.Emit(engine.BuildSealEvent{...})
+	//
+	//// 3A. 成功场景：区块成功插入
+	//d.emitter.Emit(engine.PayloadSuccessEvent{...})
+	//
+	//// 3B. 失败场景：区块验证失败
+	//d.emitter.Emit(engine.PayloadInvalidEvent{...})
+	//// 触发重试
+	//d.emitter.Emit(SequencerActionEvent{...})
+	//
+	//// 随时可能发生：链头更新
+	//d.emitter.Emit(engine.ForkchoiceUpdateEvent{...})
+
 	switch x := ev.(type) {
 	case engine.BuildStartedEvent:
 		d.onBuildStarted(x)
@@ -194,6 +237,15 @@ func (d *Sequencer) OnEvent(ev event.Event) bool {
 	return true
 }
 
+// 在以下情况触发：
+// 1. 当排序器决定开始构建新区块时
+// 2. 通过 startBuildingBlock() 方法触发
+// 触发时机：
+// 当排序器准备开始构建新区块
+// 确定了父区块和L1源后
+// 准备好区块属性后
+
+// onBuildStarted 标志着新区块构建过程的开始，初始化构建状态，设置区块封装的时间计划
 func (d *Sequencer) onBuildStarted(x engine.BuildStartedEvent) {
 	if x.DerivedFrom != (eth.L1BlockRef{}) {
 		// If we are adding new blocks onto the tip of the chain, derived from L1,
@@ -255,6 +307,12 @@ func (d *Sequencer) onInvalidPayloadAttributes(x engine.InvalidPayloadAttributes
 	d.handleInvalid()
 }
 
+// 在以下情况触发：
+// 1. 当区块构建完成时
+// 2. 所有交易已打包完成
+// 3. 区块已经准备好进行传播
+
+// onBuildSealed 表示区块已经构建完成并封装。开始区块的传播，尝试将区块加入本地链。
 func (d *Sequencer) onBuildSealed(x engine.BuildSealedEvent) {
 	if d.latest.Info != x.Info {
 		return // not our payload, should be ignored.
@@ -309,6 +367,12 @@ func (d *Sequencer) onPayloadSealExpiredError(x engine.PayloadSealExpiredErrorEv
 	d.handleInvalid()
 }
 
+//触发时机：
+//区块验证失败时
+//区块内容存在问题
+//区块不符合共识规则
+
+// 表示区块验证失败 触发错误处理流程 可能需要重新构建
 func (d *Sequencer) onPayloadInvalid(x engine.PayloadInvalidEvent) {
 	if d.latest.Ref.Hash != x.Envelope.ExecutionPayload.BlockHash {
 		return // not a payload from the sequencer
@@ -318,6 +382,7 @@ func (d *Sequencer) onPayloadInvalid(x engine.PayloadInvalidEvent) {
 	d.handleInvalid()
 }
 
+// 表示区块已成功插入链中，清理相关状态，完成区块处理流程
 func (d *Sequencer) onPayloadSuccess(x engine.PayloadSuccessEvent) {
 	// d.latest as building state may already be empty,
 	// if the forkchoice update (that dropped the stale building job) was received before the payload-success.
@@ -333,27 +398,44 @@ func (d *Sequencer) onPayloadSuccess(x engine.PayloadSuccessEvent) {
 	d.asyncGossip.Clear()
 }
 
+//触发时机：
+//需要排序器执行操作时
+//在派生工作之前
+//需要处理区块时
+
+// 用于触发排序器的行动 可能启动新的区块构建或处理现有构建 优先于派生工作
 func (d *Sequencer) onSequencerAction(x SequencerActionEvent) {
 	d.log.Debug("Sequencer action")
+	// 尝试从异步gossip获取payload
 	payload := d.asyncGossip.Get()
 	if payload != nil {
+		// 2A. 如果有可用的payload
 		if d.latest.Info.ID == (eth.PayloadID{}) {
+			// 如果当前没有正在构建的区块，记录警告
 			d.log.Warn("Found reusable payload from async gossiper, and no block was being built. Reusing payload.",
 				"hash", payload.ExecutionPayload.BlockHash,
 				"number", uint64(payload.ExecutionPayload.BlockNumber),
 				"parent", payload.ExecutionPayload.ParentHash)
 		}
+		// 将payload转换为区块引用
 		ref, err := d.toBlockRef(d.rollupCfg, payload.ExecutionPayload)
 		if err != nil {
+			// 如果转换失败，记录错误并清除异步gossip
 			d.log.Error("Payload from async-gossip buffer could not be turned into block-ref", "err", err)
 			d.asyncGossip.Clear() // bad payload
 			return
 		}
+		// 记录日志，表示恢复排序
 		d.log.Info("Resuming sequencing with previously async-gossip confirmed payload",
 			"payload", payload.ExecutionPayload.ID())
 		// Payload is known, we must have resumed sequencer-actions after a temporary error,
 		// meaning that we have seen BuildSealedEvent already.
 		// We can retry processing to make it canonical.
+		// 有效载荷已知，我们必须在临时错误后恢复序列器操作，
+		// 这意味着我们已经看到了 BuildSealedEvent。
+		// 我们可以重试处理以使其规范化。
+
+		// 发出PayloadProcessEvent事件，处理payload
 		d.emitter.Emit(engine.PayloadProcessEvent{
 			IsLastInSpan: false,
 			DerivedFrom:  eth.L1BlockRef{},
@@ -362,11 +444,15 @@ func (d *Sequencer) onSequencerAction(x SequencerActionEvent) {
 		})
 		d.latest.Ref = ref
 	} else {
+		// 2B. 如果没有可用的payload
 		if d.latest.Info != (eth.PayloadInfo{}) {
 			// We should not repeat the seal request.
+			// 如果有正在构建的区块信息，发出BuildSealEvent事件
 			d.nextActionOK = false
 			// No known payload for block building job,
 			// we have to retrieve it first.
+			// 没有已知的块构建作业的有效载荷，我们必须先检索它。
+			// 发出封装事件
 			d.emitter.Emit(engine.BuildSealEvent{
 				Info:         d.latest.Info,
 				BuildStarted: d.latest.Started,
@@ -374,6 +460,7 @@ func (d *Sequencer) onSequencerAction(x SequencerActionEvent) {
 				DerivedFrom:  eth.L1BlockRef{},
 			})
 		} else if d.latest == (BuildingState{}) {
+			// 如果没有正在构建的区块，开始新的构建
 			// If we have not started building anything, start building.
 			d.startBuildingBlock()
 		}
@@ -404,6 +491,7 @@ func (d *Sequencer) onEngineTemporaryError(x rollup.EngineTemporaryErrorEvent) {
 	}
 }
 
+// 用于重置排序器状态 中止所有进行中的工作 等待重置确认后才继续
 func (d *Sequencer) onReset(x rollup.ResetEvent) {
 	d.log.Error("Sequencer encountered reset signal, aborting work", "err", x.Err)
 	d.metrics.RecordSequencerReset()
@@ -425,6 +513,12 @@ func (d *Sequencer) onEngineResetConfirmedEvent(x engine.EngineResetConfirmedEve
 	d.log.Info("Engine reset confirmed, sequencer may continue", "next", d.nextActionOK)
 }
 
+//触发时机：
+//链头发生变化
+//安全头更新
+//最终确认头更新
+
+// 处理链头更新 管理安全滞后 调整排序器的行为
 func (d *Sequencer) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
 	d.log.Debug("Sequencer is processing forkchoice update", "unsafe", x.UnsafeL2Head, "latest", d.latestHead)
 
@@ -472,28 +566,34 @@ func (d *Sequencer) setLatestHead(head eth.L2BlockRef) {
 }
 
 // StartBuildingBlock initiates a block building job on top of the given L2 head, safe and finalized blocks, and using the provided l1Origin.
+// StartBuildingBlock 在给定的 L2 头、安全和最终确定的块之上并使用提供的 l1Origin 启动块构建作业。
+// 启动一个新的区块构建过程。它是排序器（Sequencer）开始创建新区块的关键方法。
 func (d *Sequencer) startBuildingBlock() {
 	ctx := d.ctx
+	// 获取当前的 L2 头部区块信息
 	l2Head := d.latestHead
 
 	// If we do not have data to know what to build on, then request a forkchoice update
+	// 如果没有有效的 L2 头部信息，发出一个分叉选择更新请求
 	if l2Head == (eth.L2BlockRef{}) {
 		d.emitter.Emit(engine.ForkchoiceRequestEvent{})
 		return
 	}
+	// 如果已经在当前 L2 头部上开始构建区块，则直接返回
 	// If we have already started trying to build on top of this block, we can avoid starting over again.
 	if d.latest.Onto == l2Head {
 		return
 	}
 
 	// Figure out which L1 origin block we're going to be building on top of.
+	// 使用 L1 源选择器找到下一个 L1 源区块
 	l1Origin, err := d.l1OriginSelector.FindL1Origin(ctx, l2Head)
 	if err != nil {
 		d.log.Error("Error finding next L1 Origin", "err", err)
 		d.emitter.Emit(rollup.L1TemporaryErrorEvent{Err: err})
 		return
 	}
-
+	// 检查 L1 源的一致性
 	if !(l2Head.L1Origin.Hash == l1Origin.ParentHash || l2Head.L1Origin.Hash == l1Origin.Hash) {
 		d.metrics.RecordSequencerInconsistentL1Origin(l2Head.L1Origin, l1Origin.ID())
 		d.emitter.Emit(rollup.ResetEvent{Err: fmt.Errorf("cannot build new L2 block with L1 origin %s (parent L1 %s) on current L2 head %s with L1 origin %s",
@@ -502,12 +602,13 @@ func (d *Sequencer) startBuildingBlock() {
 	}
 
 	d.log.Info("Started sequencing new block", "parent", l2Head, "l1Origin", l1Origin)
-
+	// 准备新区块的属性
 	fetchCtx, cancel := context.WithTimeout(ctx, time.Second*20)
 	defer cancel()
 
 	attrs, err := d.attrBuilder.PreparePayloadAttributes(fetchCtx, l2Head, l1Origin.ID())
 	if err != nil {
+		// 处理各种错误情况
 		if errors.Is(err, derive.ErrTemporary) {
 			d.emitter.Emit(rollup.EngineTemporaryErrorEvent{Err: err})
 			return
@@ -527,21 +628,29 @@ func (d *Sequencer) startBuildingBlock() {
 	// empty blocks (other than the L1 info deposit and any user deposits). We handle this by
 	// setting NoTxPool to true, which will cause the Sequencer to not include any transactions
 	// from the transaction pool.
+	// 如果我们的下一个 L2 区块时间戳超出了 Sequencer 漂移阈值，那么我们必须生成
+	// 空区块（L1 信息存款和任何用户存款除外）。我们通过将 NoTxPool 设置为 true 来处理此问题，这将导致 Sequencer 不包含来自交易池的任何交易。
+	// 检查是否需要生成空区块：
+	// 如果下一个 L2 区块的时间戳超出了 Sequencer 漂移阈值，将 NoTxPool 设置为 true，以生成空区块。
 	attrs.NoTxPool = uint64(attrs.Timestamp) > l1Origin.Time+d.spec.MaxSequencerDrift(l1Origin.Time)
 
 	// For the Ecotone activation block we shouldn't include any sequencer transactions.
+	// 对于 Ecotone 激活块，我们不应该包含任何序列器交易。
+	// 对于 Ecotone、Fjord 和 Granite 激活块，也设置 NoTxPool 为 true，不包含任何序列器交易。
 	if d.rollupCfg.IsEcotoneActivationBlock(uint64(attrs.Timestamp)) {
 		attrs.NoTxPool = true
 		d.log.Info("Sequencing Ecotone upgrade block")
 	}
 
 	// For the Fjord activation block we shouldn't include any sequencer transactions.
+	// 对于 Fjord 激活块，我们不应该包含任何序列化交易。
 	if d.rollupCfg.IsFjordActivationBlock(uint64(attrs.Timestamp)) {
 		attrs.NoTxPool = true
 		d.log.Info("Sequencing Fjord upgrade block")
 	}
 
 	// For the Granite activation block we shouldn't include any sequencer transactions.
+	// 对于 Granite 激活块，我们不应包含任何序列化交易。
 	if d.rollupCfg.IsGraniteActivationBlock(uint64(attrs.Timestamp)) {
 		d.log.Info("Sequencing Granite upgrade block")
 	}
@@ -551,6 +660,8 @@ func (d *Sequencer) startBuildingBlock() {
 		"origin", l1Origin, "origin_time", l1Origin.Time, "noTxPool", attrs.NoTxPool)
 
 	// Start a payload building process.
+	// 启动有效载荷构建过程。
+	// 创建 AttributesWithParent 结构，包含新区块的属性、父区块信息等。
 	withParent := &derive.AttributesWithParent{
 		Attributes:   attrs,
 		Parent:       l2Head,
@@ -559,12 +670,17 @@ func (d *Sequencer) startBuildingBlock() {
 	}
 
 	// Don't try to start building a block again, until we have heard back from this attempt
+	// 在我们收到这次尝试的回复之前，不要尝试再次开始构建块
+	// 设置 nextActionOK 为 false，防止在收到当前构建尝试的回复之前开始新的构建。
 	d.nextActionOK = false
 
 	// Reset building state, and remember what we are building on.
 	// If we get a forkchoice update that conflicts, we will have to abort building.
+	// 重置构建状态，并记住我们正在构建什么。
+	// 如果我们收到冲突的 forkchoice 更新，我们将不得不中止构建。
+	// 更新 latest 字段，记录当前正在构建的区块信息。
 	d.latest = BuildingState{Onto: l2Head}
-
+	// 通过 emitter 发出 BuildStartEvent，通知其他组件开始构建新区块。
 	d.emitter.Emit(engine.BuildStartEvent{
 		Attributes: withParent,
 	})
@@ -607,19 +723,28 @@ func (d *Sequencer) Start(ctx context.Context, head common.Hash) error {
 	return d.forceStart()
 }
 
+// Init 用于初始化排序器（Sequencer）
 func (d *Sequencer) Init(ctx context.Context, active bool) error {
+	// 锁定排序器，确保初始化过程的线程安全
 	d.l.Lock()
 	defer d.l.Unlock()
-
+	// 启动异步gossip组件，用于传播区块信息。
+	// 可能用于在网络中传播新生成的区块信息。
 	d.asyncGossip.Start()
-
+	// 发出分叉选择请求事件，更新最新的区块头信息
+	// 这样可以确保我们能够处理启动排序器的请求
 	// The `latestHead` should be updated, so we can handle start-sequencer requests
 	d.emitter.Emit(engine.ForkchoiceRequestEvent{})
 
 	if active {
+		// 如果 active 为 true，调用 forceStart() 方法强制启动排序器。
+		// 如果需要激活排序器，调用forceStart方法
 		return d.forceStart()
 	} else {
+		// 如果 active 为 false，通知监听器排序器处于停止状态。
+		// 如果不需要激活，通知监听器排序器已停止
 		if err := d.listener.SequencerStopped(); err != nil {
+			// 如果在非激活状态下通知监听器失败，返回一个错误。
 			return fmt.Errorf("failed to notify sequencer-state listener of initial stopped state: %w", err)
 		}
 		return nil
@@ -627,6 +752,7 @@ func (d *Sequencer) Init(ctx context.Context, active bool) error {
 }
 
 // forceStart skips all the checks, and just starts the sequencer
+// forceStart 跳过所有检查，直接启动测序仪
 func (d *Sequencer) forceStart() error {
 	if d.latestHead == (eth.L2BlockRef{}) {
 		// This happens if sequencing is activated on op-node startup.
@@ -701,6 +827,9 @@ func (d *Sequencer) Stop(ctx context.Context) (common.Hash, error) {
 	return d.latestHead.Hash, nil
 }
 
+// SetMaxSafeLag 设置排序器（Sequencer）的最大安全滞后值。这个值用于控制排序器在创建新区块时，与安全头部（safe head）之间允许的最大区块数差距。
+// 这个方法的作用是动态调整排序器的行为。通过设置最大安全滞后值，可以控制排序器在多大程度上允许不安全头部（unsafe head）超前于安全头部。
+// 这有助于在网络延迟或其他问题导致安全头部更新缓慢时，平衡系统的安全性和效率。
 func (d *Sequencer) SetMaxSafeLag(ctx context.Context, v uint64) error {
 	d.maxSafeLag.Store(v)
 	return nil

@@ -27,6 +27,10 @@ const (
 // the rollup config.
 // From Fjord, the max sequencer drift for a given block timestamp should be learned via the
 // ChainSpec instead of reading the rollup configuration field directly.
+// Fjord 将最大序列器漂移更改为协议常量。它以前可通过
+// 汇总配置进行配置。
+// 从 Fjord 开始，应通过
+// ChainSpec 了解给定块时间戳的最大序列器漂移，而不是直接读取汇总配置字段。
 const maxSequencerDriftFjord = 1800
 
 type ForkName string

@@ -124,10 +124,16 @@ func (b *BlockProcessor) AddTx(tx *types.Transaction) error {
 }
 
 func (b *BlockProcessor) Assemble() (*types.Block, error) {
+	// 创建区块体(Body)结构，包含交易列表
 	body := types.Body{
 		Transactions: b.transactions,
 	}
-
+	// 调用底层共识引擎的FinalizeAndAssemble方法
+	// 参数包括：
+	// - dataProvider: 数据提供者
+	// - header: 区块头
+	// - state: 状态数据
+	// - body: 区块体
 	return b.dataProvider.Engine().FinalizeAndAssemble(b.dataProvider, b.header, b.state, &body, b.receipts)
 }
 

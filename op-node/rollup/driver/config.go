@@ -19,5 +19,7 @@ type Config struct {
 
 	// SequencerMaxSafeLag is the maximum number of L2 blocks for restricting the distance between L2 safe and unsafe.
 	// Disabled if 0.
+	// SequencerMaxSafeLag 是用于限制 L2 安全和不安全之间距离的最大 L2 块数。
+	// 如果为 0，则禁用。
 	SequencerMaxSafeLag uint64 `json:"sequencer_max_safe_lag"`
 }

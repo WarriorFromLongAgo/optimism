@@ -178,6 +178,7 @@ func (o *OracleBackedL2Chain) StateAt(root common.Hash) (*state.StateDB, error) 
 	return stateDB, nil
 }
 
+// InsertBlockWithoutSetHead 调用底层的共识引擎，生成区块
 func (o *OracleBackedL2Chain) InsertBlockWithoutSetHead(block *types.Block) error {
 	processor, err := engineapi.NewBlockProcessorFromHeader(o, block.Header())
 	if err != nil {

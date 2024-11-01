@@ -47,6 +47,7 @@ type L2Source interface {
 	SystemConfigL2Fetcher
 }
 
+// DerivationPipeline 使用新的 L1 数据进行更新，并且可以迭代 Step() 函数来生成属性
 // DerivationPipeline is updated with new L1 data, and the Step() function can be iterated on to generate attributes
 type DerivationPipeline struct {
 	log       log.Logger
@@ -75,21 +76,39 @@ type DerivationPipeline struct {
 	metrics Metrics
 }
 
+// NewDerivationPipeline 创建一个 DerivationPipeline，将 L1 数据转换为 L2 块输入。
 // NewDerivationPipeline creates a DerivationPipeline, to turn L1 data into L2 block-inputs.
 func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L1Fetcher, l1Blobs L1BlobsFetcher,
 	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics,
 ) *DerivationPipeline {
+	// L1区块 -> L1Traversal -> DataSourceFactory -> L1Retrieval
+	// -> FrameQueue -> ChannelBank -> ChannelInReader
+	// -> BatchQueue -> AttributesBuilder -> AttributesQueue
+	// -> AttributesHandler -> Engine API
+
 	// Pull stages
+	// 遍历L1区块，负责按顺序读取L1区块
 	l1Traversal := NewL1Traversal(log, rollupCfg, l1Fetcher)
+	// 数据源工厂，处理不同类型的数据源（如L1区块数据、blob数据）
+	// 为L1Retrieval提供数据获取接口
 	dataSrc := NewDataSourceFactory(log, rollupCfg, l1Fetcher, l1Blobs, altDA) // auxiliary stage for L1Retrieval
+	// 从L1获取具体数据，获取区块内容、交易和收据，处理用户存款和系统配置变更
 	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal)
+	// 管理数据帧，将L1数据分割成帧，确保数据的有序处理
 	frameQueue := NewFrameQueue(log, rollupCfg, l1Src)
+	// 管理数据通道，处理通道的开启和关闭，确保数据流的正确传输
 	bank := NewChannelBank(log, rollupCfg, frameQueue, metrics)
+	// 读取通道中的数据，解析通道数据，将数据传递给下一阶段
 	chInReader := NewChannelInReader(rollupCfg, log, bank, metrics)
+	// 管理交易批次，将通道数据组织成批次，准备用于区块构建的交易集合
 	batchQueue := NewBatchQueue(log, rollupCfg, chInReader, l2Source)
+	// 构建区块属性，生成区块的必要属性（时间戳、交易列表等），为区块构建提供输入
 	attrBuilder := NewFetchingAttributesBuilder(rollupCfg, l1Fetcher, l2Source)
+	// 管理区块属性队列，确保属性按正确顺序处理，与AttributesHandler协调
 	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchQueue)
 
+	// 从 ResetEngine 重置，然后从 L1 遍历向上重置。在 ResetEngine 期间，各个阶段不会相互通信，但在 ResetEngine 之后，这是各个阶段可以相互通信的顺序。
+	// 注意：ResetEngine 是唯一可能失败的重置。
 	// Reset from ResetEngine then up from L1 Traversal. The stages do not talk to each other during
 	// the ResetEngine, but after the ResetEngine, this is the order in which the stages could talk to each other.
 	// Note: The ResetEngine is the only reset that can fail.
@@ -134,22 +153,36 @@ func (dp *DerivationPipeline) Origin() eth.L1BlockRef {
 // Any other error is critical and the derivation pipeline should be reset.
 // An error is expected when the underlying source closes.
 // When Step returns nil, it should be called again, to continue the derivation process.
+// Step 尝试推进缓冲区。
+// 如果管道因等待新的 L1 数据而阻塞，则返回 EOF。
+// 如果 ctx 错误，则不会返回任何错误，但步骤可能会提前退出，但仍可继续。
+// 任何其他错误都是严重的，应重置派生管道。
+// 当底层源关闭时，预计会出现错误。
+// 当 Step 返回 nil 时，应再次调用它，以继续派生过程。
 func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2BlockRef) (outAttrib *AttributesWithParent, outErr error) {
+	// 记录当前处理的L1区块引用
 	defer dp.metrics.RecordL1Ref("l1_derived", dp.Origin())
-
+	// 设置派生过程为非空闲状态
 	dp.metrics.SetDerivationIdle(false)
 	defer func() {
+		// 如果遇到EOF或引擎同步错误，设置为空闲状态
 		if outErr == io.EOF || errors.Is(outErr, EngineELSyncing) {
 			dp.metrics.SetDerivationIdle(true)
 		}
 	}()
 
+	// 检查是否需要重置任何阶段
 	// if any stages need to be reset, do that first.
 	if dp.resetting < len(dp.stages) {
+		// 确保引擎已经重置
 		if !dp.engineIsReset {
 			return nil, NewResetError(errors.New("cannot continue derivation until Engine has been reset"))
 		}
 
+		// 处理pending safe head不匹配的情况
+		// 在引擎重置以确保其源自规范的 L1 链后，
+		// 我们仍然需要在内部进一步倒回 L1 遍历，
+		// 这样我们就可以读取构建安全头之后的下一个批次所需的所有 L2 数据。
 		// After the Engine has been reset to ensure it is derived from the canonical L1 chain,
 		// we still need to internally rewind the L1 traversal further,
 		// so we can read all the L2 data necessary for constructing the next batches that come after the safe head.
@@ -158,7 +191,7 @@ func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2Bl
 				return nil, fmt.Errorf("failed initial reset work: %w", err)
 			}
 		}
-
+		// 重置当前阶段
 		if err := dp.stages[dp.resetting].Reset(ctx, dp.origin, dp.resetSysConfig); err == io.EOF {
 			dp.log.Debug("reset of stage completed", "stage", dp.resetting, "origin", dp.origin)
 			dp.resetting += 1
@@ -169,20 +202,22 @@ func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2Bl
 			return nil, nil
 		}
 	}
-
+	// 检查L1源是否发生变化
 	prevOrigin := dp.origin
 	newOrigin := dp.attrib.Origin()
 	if prevOrigin != newOrigin {
+		// 验证新的L1源的有效性
 		// Check if the L2 unsafe head origin is consistent with the new origin
 		if err := VerifyNewL1Origin(ctx, prevOrigin, dp.l1Fetcher, newOrigin); err != nil {
 			return nil, fmt.Errorf("failed to verify L1 origin transition: %w", err)
 		}
 		dp.origin = newOrigin
 	}
-
+	// 尝试获取下一个区块属性
 	if attrib, err := dp.attrib.NextAttributes(ctx, pendingSafeHead); err == nil {
 		return attrib, nil
 	} else if err == io.EOF {
+		// 如果所有阶段都返回EOF，尝试推进到下一个L1区块
 		// If every stage has returned io.EOF, try to advance the L1 Origin
 		return nil, dp.traversal.AdvanceL1Block(ctx)
 	} else if errors.Is(err, EngineELSyncing) {

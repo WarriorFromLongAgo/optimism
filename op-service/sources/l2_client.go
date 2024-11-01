@@ -97,6 +97,7 @@ func (s *L2Client) RollupConfig() *rollup.Config {
 }
 
 // L2BlockRefByLabel returns the [eth.L2BlockRef] for the given block label.
+// L2BlockRefByLabel 返回给定块标签的 [eth.L2BlockRef]。
 func (s *L2Client) L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error) {
 	envelope, err := s.PayloadByLabel(ctx, label)
 	if err != nil {
@@ -153,20 +154,34 @@ func (s *L2Client) L2BlockRefByHash(ctx context.Context, hash common.Hash) (eth.
 
 // SystemConfigByL2Hash returns the [eth.SystemConfig] (matching the config updates up to and including the L1 origin) for the given L2 block hash.
 // The returned [eth.SystemConfig] may not be in the canonical chain when the hash is not canonical.
+// SystemConfigByL2Hash 返回给定 L2 块哈希的 [eth.SystemConfig]（匹配配置更新直至 L1 原点）。
+// 当哈希不是规范的时，返回的 [eth.SystemConfig] 可能不在规范链中。
+// 方法的主要功能是根据给定的 L2 区块哈希获取对应的系统配置（SystemConfig）。这个方法首先尝试从缓存中获取配置，如果缓存中没有，则从区块数据中提取配置信息。
+// L2 区块包含 L1 信息：每个 L2 区块都包含一个特殊的交易，通常是第一个交易，它包含了相关的 L1 信息。这个交易被称为 "L1 info deposit transaction"。
+// L1 信息中包含 SystemConfig：这个 L1 信息交易中包含了当前的 SystemConfig 数据。
+// SystemConfig 它代表了在每个 L2 区块中传递的 rollup 系统配置，这个配置可以通过 L1 系统配置事件进行更改。
+// BatcherAddr: 用于识别批处理发送者地址，用于批处理收件箱数据交易过滤。
+// Overhead: 标识 L1 费用开销。在 Ecotone 升级之前，这个值会直接传递给引擎；升级后，这个值始终为零，不会传递给引擎。
+// calar: 标识 L1 费用标量。在 Ecotone 升级之前，这个值会直接传递给引擎；升级后，这个值编码了多个标量数据。
+// GasLimit: 标识 L2 区块的燃气限制。
 func (s *L2Client) SystemConfigByL2Hash(ctx context.Context, hash common.Hash) (eth.SystemConfig, error) {
+	// 尝试从缓存中获取系统配置
 	if ref, ok := s.systemConfigsCache.Get(hash); ok {
 		return ref, nil
 	}
-
+	// 如果缓存中没有，则通过区块哈希获取区块数据
 	envelope, err := s.PayloadByHash(ctx, hash)
 	if err != nil {
 		// w%: wrap to preserve ethereum.NotFound case
+		// 如果获取失败，返回错误，保留 ethereum.NotFound 错误类型
 		return eth.SystemConfig{}, fmt.Errorf("failed to determine block-hash of hash %v, could not get payload: %w", hash, err)
 	}
+	// 从区块数据中提取系统配置
 	cfg, err := derive.PayloadToSystemConfig(s.rollupCfg, envelope.ExecutionPayload)
 	if err != nil {
 		return eth.SystemConfig{}, err
 	}
+	// 将提取的系统配置添加到缓存中
 	s.systemConfigsCache.Add(hash, cfg)
 	return cfg, nil
 }

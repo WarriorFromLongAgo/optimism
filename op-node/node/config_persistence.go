@@ -48,6 +48,8 @@ func (p *ActiveConfigPersistence) SequencerStopped() error {
 	return p.persist(false)
 }
 
+// persist 尽可能安全地将新的配置状态写入文件。
+// 它使用同步来确保数据确实持久保存到磁盘，并在将其重命名到位之前先写入临时文件。在 UNIX 系统上，此重命名通常是原子的，以确保在写入过程中发生 IO 错误时，实际文件不会损坏。
 // persist writes the new config state to the file as safely as possible.
 // It uses sync to ensure the data is actually persisted to disk and initially writes to a temp file
 // before renaming it into place. On UNIX systems this rename is typically atomic, ensuring the

@@ -65,22 +65,35 @@ func (f *DisputeGameFactory) Version(ctx context.Context) (string, error) {
 // given cut off time. If one is found, returns true and the time the game was created at.
 // If no matching proposal is found, returns false, time.Time{}, nil
 func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, error) {
+	// proposer 提案者的地址
+	// cutoff 截止时间,用于检查是否在这个时间之后有提案。
+	// gameType 争议游戏类型
+	// return
+	// bool 表示是否在截止时间之后有提案。
+	// time.Time 如果有提案,这个时间表示最近一次提案的时间。
+
+	// 获取游戏总数
 	gameCount, err := f.gameCount(ctx)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("failed to get dispute game count: %w", err)
 	}
+	// 检查是否有游戏
 	if gameCount == 0 {
 		return false, time.Time{}, nil
 	}
+	// 从最新的游戏开始,向前遍历所有游戏。
 	for idx := gameCount - 1; ; idx-- {
+		// 获取每个游戏的元数据
 		game, err := f.gameAtIndex(ctx, idx)
 		if err != nil {
 			return false, time.Time{}, fmt.Errorf("failed to get dispute game %d: %w", idx, err)
 		}
+		// 检查游戏时间, 如果游戏时间早于截止时间,说明没有找到符合条件的提案。
 		if game.Timestamp.Before(cutoff) {
 			// Reached a game that is before the expected cutoff, so we haven't found a suitable proposal
 			return false, time.Time{}, nil
 		}
+		// 如果找到匹配的游戏类型和提案者,返回true和游戏时间。
 		if game.GameType == gameType && game.Proposer == proposer {
 			// Found a matching proposal
 			return true, game.Timestamp, nil

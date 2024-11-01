@@ -100,6 +100,8 @@ func (p *SimpleAsyncGossiper) Stop() {
 
 // Start starts the AsyncGossiper's gossiping loop on a separate goroutine
 // each behavior of the loop is handled by a select case on a channel, plus an internal handler function call
+// Start 在单独的 goroutine 上启动 AsyncGossiper 的 gossiper 循环
+// 循环的每个行为都由通道上的 select case 以及内部处理函数调用处理
 func (p *SimpleAsyncGossiper) Start() {
 	// if the gossiping is already running, return
 	if !p.running.CompareAndSwap(false, true) {

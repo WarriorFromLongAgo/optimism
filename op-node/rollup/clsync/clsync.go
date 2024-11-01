@@ -47,15 +47,24 @@ func (eq *CLSync) AttachEmitter(em event.Emitter) {
 }
 
 // LowestQueuedUnsafeBlock retrieves the first queued-up L2 unsafe payload, or a zeroed reference if there is none.
+// 获取队列中的第一个不安全 L2 payload（有效载荷）。
+// 如果队列中没有不安全的 payload，则返回一个零值引用。
 func (eq *CLSync) LowestQueuedUnsafeBlock() eth.L2BlockRef {
+	// "不安全"（unsafe）在这里指的是尚未被完全确认或可能会发生变化的区块或 payload。
+
+	// 获取队列中的第一个不安全 payload
 	payload := eq.unsafePayloads.Peek()
+	// 如果队列为空，返回一个空的 L2BlockRef
 	if payload == nil {
 		return eth.L2BlockRef{}
 	}
+	// 将 payload 转换为 BlockRef
 	ref, err := derive.PayloadToBlockRef(eq.cfg, payload.ExecutionPayload)
+	// 如果转换出错，返回一个空的 L2BlockRef
 	if err != nil {
 		return eth.L2BlockRef{}
 	}
+	// 返回成功转换的 BlockRef
 	return ref
 }
 

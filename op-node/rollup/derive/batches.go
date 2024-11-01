@@ -28,6 +28,9 @@ const (
 	BatchFuture
 )
 
+// CheckBatch 检查给定的批次是否可以应用于给定的 l2SafeHead 之上，给定批次所包含的上下文 L1 块。
+// l1Blocks 的第一个条目应与 l2SafeHead 的来源匹配。应提供一个或多个连续的 l1Blocks。
+// 如果只有一个 L1 块，批次是否有效的决定可能必须保持悬而未决。
 // CheckBatch checks if the given batch can be applied on top of the given l2SafeHead, given the contextual L1 blocks the batch was included in.
 // The first entry of the l1Blocks should match the origin of the l2SafeHead. One or more consecutive l1Blocks should be provided.
 // In case of only a single L1 block, the decision whether a batch is valid may have to stay undecided.

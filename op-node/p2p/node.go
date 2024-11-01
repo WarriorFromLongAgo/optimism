@@ -195,9 +195,12 @@ func (n *NodeP2P) AltSyncEnabled() bool {
 }
 
 func (n *NodeP2P) RequestL2Range(ctx context.Context, start, end eth.L2BlockRef) error {
+	// 检查替代同步功能是否启用
 	if !n.AltSyncEnabled() {
+		// 如果未启用，返回错误
 		return fmt.Errorf("cannot request range %s - %s, req-resp sync is not enabled", start, end)
 	}
+	// 调用同步客户端的 RequestL2Range 方法
 	_, err := n.syncCl.RequestL2Range(ctx, start, end)
 	return err
 }

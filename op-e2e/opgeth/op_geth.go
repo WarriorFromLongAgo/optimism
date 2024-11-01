@@ -148,6 +148,8 @@ func (d *OpGeth) Close() {
 
 // AddL2Block Appends a new L2 block to the current chain including the specified transactions
 // The L1Info transaction is automatically prepended to the created block
+// AddL2Block 将包含指定交易的新 L2 区块附加到当前链
+// L1Info 交易自动附加到创建的区块前面
 func (d *OpGeth) AddL2Block(ctx context.Context, txs ...*types.Transaction) (*eth.ExecutionPayloadEnvelope, error) {
 	attrs, err := d.CreatePayloadAttributes(txs...)
 	if err != nil {

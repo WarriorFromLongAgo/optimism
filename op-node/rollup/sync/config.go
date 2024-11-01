@@ -12,6 +12,12 @@ type Mode int
 //     fetches unsafe blocks that it has missed.
 //  2. In execution-layer (EL) sync, the op-node tells the execution client to sync towards the tip of the chain.
 //     It will consolidate the chain as usual. This allows execution clients to snap sync if they are capable of it.
+//
+// op-node 有两种同步模式：
+// 1. 在共识层 (CL) 同步中，op-node 完全驱动执行客户端并导入不安全区块 &
+// 获取它错过的不安全区块。
+// 2. 在执行层 (EL) 同步中，op-node 告诉执行客户端向链的末端同步。
+// 它将像往常一样合并链条。如果执行客户端有能力，这允许它们快速同步。
 const (
 	CLSync Mode = iota
 	ELSync

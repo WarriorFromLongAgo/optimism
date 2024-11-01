@@ -23,9 +23,11 @@ func NewL1Tracker(inner derive.L1Fetcher) *L1Tracker {
 	}
 }
 
+// OnEvent 返回 true，表示事件已被处理。
 func (st *L1Tracker) OnEvent(ev event.Event) bool {
 	switch x := ev.(type) {
 	case L1UnsafeEvent:
+		//它会调用 st.cache.Insert(x.L1Unsafe) 方法，将 L1UnsafeEvent 中的 L1Unsafe 信息插入到 L1Tracker 的缓存中。
 		st.cache.Insert(x.L1Unsafe)
 	default:
 		return false
@@ -34,6 +36,7 @@ func (st *L1Tracker) OnEvent(ev event.Event) bool {
 	return true
 }
 
+// L1BlockRefByNumber 在 L1Tracker 自身的 L1BlockRefByNumber 方法中使用。当需要获取特定编号的 L1 区块引用时，会首先检查缓存：
 func (l *L1Tracker) L1BlockRefByNumber(ctx context.Context, num uint64) (eth.L1BlockRef, error) {
 	if ref, ok := l.cache.Get(num); ok {
 		return ref, nil

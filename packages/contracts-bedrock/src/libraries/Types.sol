@@ -24,8 +24,11 @@ library Types {
     /// @custom:field latestBlockhash          Hash of the block this output was generated from.
     struct OutputRootProof {
         bytes32 version;
+        // 状态根（包含所有账户状态）
         bytes32 stateRoot;
+        // 消息传递者的存储根
         bytes32 messagePasserStorageRoot;
+        // 最新区块哈希
         bytes32 latestBlockhash;
     }
 

@@ -290,15 +290,42 @@ contract OptimismPortal2 is Initializable, ResourceMetering, ISemver {
         }
     }
 
+    /// @notice 证明提款交易。
+    /// @param _tx 需要完成的提款交易。
+    /// @param _disputeGameIndex 用于证明提款的争议游戏的索引。
+    /// @param _outputRootProof L2ToL1MessagePasser 合约存储根的包含证明。
+    /// @param _withdrawalProof L2ToL1MessagePasser 合约中提款的包含证明。
     /// @notice Proves a withdrawal transaction.
     /// @param _tx               Withdrawal transaction to finalize.
     /// @param _disputeGameIndex Index of the dispute game to prove the withdrawal against.
     /// @param _outputRootProof  Inclusion proof of the L2ToL1MessagePasser contract's storage root.
     /// @param _withdrawalProof  Inclusion proof of the withdrawal in L2ToL1MessagePasser contract.
     function proveWithdrawalTransaction(
+        // 原始提现证明
+//        这是原始的提现交易信息
+//        包含了提现的基本信息：发送者地址、接收者地址、金额、数据等
+//        用于重建提现的哈希，以验证提现的真实性
         Types.WithdrawalTransaction memory _tx,
+        // 在DisputeGameFactory中的索引
+//        在DisputeGameFactory中的游戏索引
+//        用于获取对应的争议游戏合约
+//        通过争议游戏来验证L2输出根的有效性
+//        确保L2状态的正确性
         uint256 _disputeGameIndex,
+        // 输出根，里面包含了状态根，存储根，等等，用于验证L2状态输出的有效性
+//        L2状态的输出根证明
+//        包含：
+//        状态根(stateRoot)：L2整体状态的根哈希
+//        消息传递合约的存储根(messagePasserStorageRoot)：用于验证提现消息
+//        最新区块哈希(latestBlockhash)：用于时间验证
+//        用于验证L2状态的完整性
         Types.OutputRootProof calldata _outputRootProof,
+        // 默克尔证明数组，证明提现交易确实存在于L2状态中
+        // 用于验证交易是否包含在特定的状态根中
+//        默克尔证明数组
+//        证明提现交易确实存在于L2的状态中
+//        用于验证提现消息是否真实存在于L2ToL1MessagePasser合约的存储中
+//        通过这个证明，可以确保提现请求确实是在L2上发起的
         bytes[] calldata _withdrawalProof
     )
         external
@@ -329,6 +356,8 @@ contract OptimismPortal2 is Initializable, ResourceMetering, ISemver {
         // Compute the storage slot of the withdrawal hash in the L2ToL1MessagePasser contract.
         // Refer to the Solidity documentation for more information on how storage layouts are
         // computed for mappings.
+        // 计算 L2ToL1MessagePasser 合约中提款哈希的存储槽。
+        // 有关如何计算映射的存储布局的更多信息，请参阅 Solidity 文档。
         bytes32 storageKey = keccak256(
             abi.encode(
                 withdrawalHash,
@@ -340,6 +369,9 @@ contract OptimismPortal2 is Initializable, ResourceMetering, ISemver {
         // on L2. If this is true, under the assumption that the SecureMerkleTrie does not have
         // bugs, then we know that this withdrawal was actually triggered on L2 and can therefore
         // be relayed on L1.
+        // 验证此提款的哈希值是否存储在 L2toL1MessagePasser 合约中
+        // 在 L2 上。如果这是真的，假设 SecureMerkleTrie 没有
+        // 错误，那么我们知道此提款实际上是在 L2 上触发的，因此可以在 L1 上中继。
         if (
             SecureMerkleTrie.verifyInclusionProof({
                 _key: abi.encode(storageKey),
